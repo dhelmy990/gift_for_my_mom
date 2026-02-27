@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import re
 
-def extract_last_table_as_text(pdf_path="./CAROLINE FEBRUARY/1.PDF", k=None):
+def extract_last_table_as_df(pdf_path="./CAROLINE FEBRUARY/1.PDF", k=None, name : str = "default"):
     """
     Extract Total Room Nights and Room Revenue from the Grand Total section.
 
@@ -33,7 +33,9 @@ def extract_last_table_as_text(pdf_path="./CAROLINE FEBRUARY/1.PDF", k=None):
 
 
 def parse_table_text(text, k=None):
-    """Parse the extracted text and return a DataFrame with filtered columns."""
+    """Parse the extracted text and return a DataFrame with filtered columns.
+      I think this isn't really how i'd do it but its ok.
+    """
     lines = text.strip().split('\n')
 
     # Find the header line (contains month names like "Jan 2026")
@@ -81,18 +83,75 @@ def parse_table_text(text, k=None):
     return df
 
 
+def two_tablify(dataframes: dict):
+    """
+    Transform dict of hotel DataFrames into two tables:
+    - One for Total Room Nights (TRN)
+    - One for Room Revenue (RR)
+
+    Each table has hotels as rows and months as columns.
+
+    Returns:
+        tuple: (trn_df, rr_df)
+    """
+    trn_rows = {}
+    rr_rows = {}
+
+    for hotel_name, df in dataframes.items():
+        trn_rows[hotel_name] = df.loc['Total Room Nights']
+        rr_rows[hotel_name] = df.loc['Room Revenue']
+
+    trn_df = pd.DataFrame(trn_rows).T
+    rr_df = pd.DataFrame(rr_rows).T
+
+    # Sort columns: months chronologically, Total at end
+    month_order = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+                   'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12}
+
+    def sort_key(col):
+        if col == 'Total':
+            return (9999, 0)  # Total always last
+        month = col.split()[0]
+        year = int(col.split()[1])
+        return (year, month_order.get(month, 0))
+
+    sorted_cols = sorted(trn_df.columns, key=sort_key)
+    trn_df = trn_df[sorted_cols]
+    rr_df = rr_df[sorted_cols]
+
+    # Sort rows (hotels) alphabetically
+    trn_df = trn_df.sort_index()
+    rr_df = rr_df.sort_index()
+
+    return trn_df, (1.1 * rr_df).round(2)
+
 def main():
     target_dir = "./CAROLINE FEBRUARY/"
     pdf_files = [f for f in os.listdir(target_dir) if f.upper().endswith('.PDF')]
 
+    data = {}
+    
+
     for pdf_file in pdf_files:
         pdf_path = os.path.join(target_dir, pdf_file)
-        print(f"\n=== {pdf_file} ===")
-        df = extract_last_table_as_text(pdf_path, k=2)  # Example: keep last 2 months + Total
+        eventual_col = pdf_file.split()[0]
+        print(f"\n=== {eventual_col} ===")
+        df = extract_last_table_as_df(pdf_path, k=2)  # Example: keep last 2 months + Total
+        
         if df is not None:
+            data[eventual_col] = df
             print(df)
         else:
             print("Could not extract data")
+
+    trn_df, rr_df = two_tablify(data)
+    print("\n=== Total Room Nights ===")
+    print(trn_df)
+    print("\n=== Room Revenue ===")
+    print(rr_df)
+   
+            
+   
 
 
 if __name__ == "__main__":
