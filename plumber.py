@@ -3,6 +3,8 @@ import pandas as pd
 import os
 import re
 
+DESIRED_ORDER = ["HB", "VLV", "VBN", "HMB", "HMR"]
+
 def extract_last_table_as_df(pdf_path="./CAROLINE FEBRUARY/1.PDF", k=None, name : str = "default"):
     """
     Extract Total Room Nights and Room Revenue from the Grand Total section.
@@ -120,8 +122,10 @@ def two_tablify(dataframes: dict):
     rr_df = rr_df[sorted_cols]
 
     # Sort rows (hotels) alphabetically
-    trn_df = trn_df.sort_index()
-    rr_df = rr_df.sort_index()
+    print(trn_df.index)
+
+    trn_df = trn_df.reindex(DESIRED_ORDER).drop(columns = ["Total"])
+    rr_df = rr_df.reindex(DESIRED_ORDER).drop(columns = ["Total"])
 
     return trn_df, (1.1 * rr_df).round(2)
 
