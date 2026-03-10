@@ -1,4 +1,7 @@
 import streamlit as st
+import plumber
+print(f"DEBUG: Functions in plumber: {dir(plumber)}")
+
 import os
 import tempfile
 import pandas as pd
