@@ -2,8 +2,36 @@ import pdfplumber
 import pandas as pd
 import os
 import re
+from itertools import takewhile
+
+
 
 DESIRED_ORDER = ["HB", "VLV", "VBN", "HMB", "HMR"]
+
+def extract_all_tables(exclude : list, pdf_path="./CAROLINE FEBRUARY/JANUARY 2026/VLV.PDF"):
+    df = pd.DataFrame(columns=['Sum of RNS', 'Sum of R REVENUE'])
+    df.index.name = 'TRAVEL AGENT'
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            for rect in page.rects:
+                bbox = (rect['x0'], rect['top'],
+                        rect['x1'], rect['bottom'])
+                cropped = page.crop(bbox)
+                text = cropped.extract_text()
+                lines = text.split('\n')
+                lines = [lines[i] for i in (0, -3, -1)] #the first is name, second is RNR, third is total revenue
+                _ = " ".join(takewhile(lambda w: not any(c.isdigit() for c in w), lines[0].split())) #get everything until first number
+                if _ == "":
+                    _ = lines[0].split()[0]
+                if any(item in _.lower() for item in exclude):
+                    continue
+                else:
+                    lines[0] = _
+                lines[1], lines[2] = lines[1].split()[-1], lines[2].split()[-1]
+                df.loc[lines[0]] = [float(re.sub(r'[^\d.]', '', x)) for x in lines[1:]]
+        return df
+    return None
 
 def extract_last_table_as_df(pdf_path="./CAROLINE FEBRUARY/1.PDF", k=None, name : str = "default"):
     """
@@ -20,6 +48,7 @@ def extract_last_table_as_df(pdf_path="./CAROLINE FEBRUARY/1.PDF", k=None, name 
     Returns:
         pandas DataFrame with filtered columns
     """
+
     with pdfplumber.open(pdf_path) as pdf:
         last_page = pdf.pages[-1]
         if last_page.rects:
