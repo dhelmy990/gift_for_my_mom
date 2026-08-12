@@ -1,0 +1,33 @@
+"""Domain objects for reviewing cleaned company names."""
+
+from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass
+class Group:
+    id: str
+    canonical_title: str
+    existing: bool
+
+
+@dataclass
+class NameRecord:
+    cleaned_name: str
+    group_id: str | None
+    source: Literal["exact", "suggested", "unknown"]
+    selected: bool = False
+    excluded: bool = False
+
+
+@dataclass
+class ReviewBoard:
+    groups: dict[str, Group]
+    names: dict[str, NameRecord]
+
+
+@dataclass(frozen=True)
+class SubmissionPayload:
+    groups: list[dict[str, object]]
+    mappings: list[dict[str, object]]
+    unmap_names: list[str]
