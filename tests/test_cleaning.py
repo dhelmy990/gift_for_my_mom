@@ -39,5 +39,23 @@ def test_clean_company_name_preserves_suffix_like_hyphenated_word() -> None:
     assert clean_company_name("Acme co-op") == "Acme co-op"
 
 
+def test_clean_company_name_removes_lowercase_ascii_trailing_text() -> None:
+    assert clean_company_name("Acme LTDroom 12") == "Acme"
+
+
+@pytest.mark.parametrize("name", ["cobalt", "company", "co-op"])
+def test_clean_company_name_preserves_ambiguous_co_words(name: str) -> None:
+    assert clean_company_name(name) == name
+
+
+def test_clean_company_name_removes_suffix_wrapper_punctuation() -> None:
+    assert clean_company_name("Acme (Pte Ltd)") == "Acme"
+
+
 def test_normalize_lookup_key() -> None:
     assert normalize_lookup_key("Kake Hotels-Marketing") == "kake hotels marketing"
+
+
+def test_normalize_lookup_key_rejects_empty_key() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        normalize_lookup_key("()")

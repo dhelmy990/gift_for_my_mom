@@ -7,16 +7,10 @@ _SEPARATOR_RE = re.compile(r"[_|]+")
 _WHITESPACE_RE = re.compile(r"\s+")
 _NON_WORD_RE = re.compile(r"[\W_]+", re.UNICODE)
 _SUFFIX_RE = re.compile(
-    r"(?<!\w)(?i:"
-    r"co\s*\.?\s*,?\s*ltd\.?|"
-    r"pte\s+ltd\.?|"
-    r"sdn\s+bhd\.?|"
-    r"limited\.?|"
-    r"gmbh\.?|"
-    r"ltd\.?|"
-    r"pte\.?|"
-    r"co\.?)"
-    r"(?=$|[^\w-]|[A-Z]|[^\x00-\x7f])"
+    r"(?<!\w)(?:"
+    r"(?i:co\s*\.?\s*,?\s*ltd\.?|pte\s+ltd\.?|sdn\s+bhd\.?|"
+    r"limited\.?|gmbh\.?|ltd\.?|pte\.?)|"
+    r"(?i:co\.?)(?=$|[^\w-]|[A-Z]|[^\x00-\x7f]))"
 )
 
 
@@ -26,6 +20,7 @@ def clean_company_name(raw_name: str) -> str:
     suffix = _SUFFIX_RE.search(name)
     if suffix:
         name = name[: suffix.start()]
+        name = re.sub(r"[([{]\s*$", "", name)
 
     name = name.strip(" \t\r\n,.;:_-|/\\")
     name = _WHITESPACE_RE.sub(" ", name)
@@ -37,4 +32,7 @@ def clean_company_name(raw_name: str) -> str:
 def normalize_lookup_key(name: str) -> str:
     """Return a case-insensitive, punctuation-neutral company lookup key."""
     cleaned = clean_company_name(name).casefold()
-    return _WHITESPACE_RE.sub(" ", _NON_WORD_RE.sub(" ", cleaned)).strip()
+    key = _WHITESPACE_RE.sub(" ", _NON_WORD_RE.sub(" ", cleaned)).strip()
+    if not key:
+        raise ValueError("company lookup key is empty after normalization")
+    return key
