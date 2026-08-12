@@ -172,3 +172,26 @@ def test_aggregate_included_aliases_by_canonical_group_and_sort_by_revenue() -> 
         ]
     )
     pd.testing.assert_frame_equal(result, expected)
+
+
+def test_aggregate_integer_inputs_produce_floating_totals() -> None:
+    review = board(
+        groups=[Group("dnata", "DNATA", True)],
+        names=[
+            NameRecord("DNATA Travel Group", "dnata", "exact", selected=True),
+            NameRecord("DNATA_TRAVEL_GROUP", "dnata", "suggested", selected=True),
+        ],
+    )
+    rows = pd.DataFrame(
+        [
+            {"cleaned_name": "DNATA Travel Group", "rns": 2, "revenue": 100},
+            {"cleaned_name": "DNATA_TRAVEL_GROUP", "rns": 3, "revenue": 150},
+        ]
+    )
+
+    result = aggregate_by_group(rows, review)
+
+    assert result.loc[0, "Sum of RNS"] == 5.0
+    assert result.loc[0, "Sum of R REVENUE"] == 250.0
+    assert pd.api.types.is_float_dtype(result["Sum of RNS"])
+    assert pd.api.types.is_float_dtype(result["Sum of R REVENUE"])

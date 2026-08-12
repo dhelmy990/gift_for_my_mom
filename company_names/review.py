@@ -127,4 +127,7 @@ def aggregate_by_group(rows: pd.DataFrame, board: ReviewBoard) -> pd.DataFrame:
         .sort_values("Sum of R REVENUE", ascending=False, kind="stable")
         .reset_index(drop=True)
     )
+    result[["Sum of RNS", "Sum of R REVENUE"]] = result[
+        ["Sum of RNS", "Sum of R REVENUE"]
+    ].astype(float)
     return result[["TRAVEL AGENT", "Sum of RNS", "Sum of R REVENUE"]]
