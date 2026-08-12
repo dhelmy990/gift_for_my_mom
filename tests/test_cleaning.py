@@ -31,5 +31,13 @@ def test_clean_company_name_rejects_suffix_only_name() -> None:
         clean_company_name("Pte Ltd")
 
 
+def test_clean_company_name_removes_lowercase_non_ascii_trailing_text() -> None:
+    assert clean_company_name("Betoptop GmbHüber den Dächern") == "Betoptop"
+
+
+def test_clean_company_name_preserves_suffix_like_hyphenated_word() -> None:
+    assert clean_company_name("Acme co-op") == "Acme co-op"
+
+
 def test_normalize_lookup_key() -> None:
     assert normalize_lookup_key("Kake Hotels-Marketing") == "kake hotels marketing"

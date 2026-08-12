@@ -16,7 +16,7 @@ _SUFFIX_RE = re.compile(
     r"ltd\.?|"
     r"pte\.?|"
     r"co\.?)"
-    r"(?=$|[^\w]|[A-Z\u00c0-\u00de])"
+    r"(?=$|[^\w-]|[A-Z]|[^\x00-\x7f])"
 )
 
 
