@@ -1,0 +1,6 @@
+.streamlit/secrets.toml
+.superpowers/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.~lock.*#
