@@ -255,9 +255,11 @@ def group_title_errors(board: ReviewBoard, values: dict[str, str]) -> dict[str, 
     """Validate proposed group titles together so duplicate errors are symmetric."""
     errors: dict[str, str] = {}
     normalized: dict[str, str] = {}
+    populated_ids = {group.id for group in _display_groups(board)}
     effective_titles = {
         group_id: values.get(group_id, group.canonical_title)
         for group_id, group in board.groups.items()
+        if group_id in populated_ids
     }
     for group_id in values:
         if group_id not in board.groups:
@@ -453,28 +455,13 @@ def _restore_container_ids(result, source):
 
 def _semantic_pill_preview(board: ReviewBoard) -> str:
     """Render colored, per-container pills beside the string-only drag component."""
-    styles = {
-        "exact": ("#8FC5FF", "Exact match"),
-        "suggested": ("#FFD166", "Suggested match"),
-        "unknown": ("#e9ecef", "Unmatched"),
-    }
     sections = []
     for container in sortable_containers(board):
         pills = []
         for item in container["items"]:
             name = item["name"]
             record = board.names[name]
-            style = styles.get(record.source)
-            if style is None:
-                raise ValueError(
-                    f"Selected name {name!r} has invalid source {record.source!r}"
-                )
-            color, meaning = style
-            escaped = html.escape(name, quote=True)
-            pills.append(
-                f'<span class="semantic-pill source-{record.source}" style="background:{color}" '
-                f'aria-label="{meaning}: {escaped}">{escaped}</span>'
-            )
+            pills.append(semantic_pill(record))
         sections.append(
             '<section class="semantic-container" '
             f'data-container="{html.escape(str(container["id"]), quote=True)}">'
@@ -482,6 +469,26 @@ def _semantic_pill_preview(board: ReviewBoard) -> str:
             f'{"".join(pills)}</section>'
         )
     return "".join(sections)
+
+
+def semantic_pill(record) -> str:
+    """Return an escaped, high-contrast pill with a textual match meaning."""
+    styles = {
+        "exact": ("#8FC5FF", "Exact match"),
+        "suggested": ("#FFD166", "Suggested match"),
+        "unknown": ("#e9ecef", "Unmatched"),
+    }
+    style = styles.get(record.source)
+    if style is None:
+        raise ValueError(
+            f"Selected name {record.cleaned_name!r} has invalid source {record.source!r}"
+        )
+    color, meaning = style
+    escaped = html.escape(record.cleaned_name, quote=True)
+    return (
+        f'<span class="semantic-pill source-{record.source}" style="background:{color}" '
+        f'aria-label="{meaning}: {escaped}">{escaped}</span>'
+    )
 
 
 def _move_record(board: ReviewBoard, name: str, destination: str) -> None:
@@ -641,7 +648,7 @@ def render_name_review(
         st.write("Search for duplicate names to add them here.")
     for name in tray_names:
         columns = st.columns([4, 1])
-        columns[0].write(name)
+        columns[0].markdown(semantic_pill(board.names[name]), unsafe_allow_html=True)
         columns[1].button(
             "Return to separate",
             key=review_widget_key(request_id, "return_to_separate", _item_id(name)),
@@ -669,7 +676,7 @@ def render_name_review(
         )
         for name in member_names:
             columns = st.columns([4, 1])
-            columns[0].write(name)
+            columns[0].markdown(semantic_pill(board.names[name]), unsafe_allow_html=True)
             columns[1].button(
                 "Move to tray",
                 key=review_widget_key(request_id, "move_to_tray", group.id, _item_id(name)),

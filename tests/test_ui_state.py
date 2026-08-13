@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 
 from company_names.models import Group, NameRecord, ReviewBoard
+from company_names.review import validate_board
 from company_names.ui import (
     SEMANTIC_PILL_CSS,
     _board_revision,
@@ -29,6 +30,7 @@ from company_names.ui import (
     group_title_errors,
     move_to_tray,
     review_summary,
+    semantic_pill,
     return_to_separate,
     return_to_inventory,
     sortable_containers,
@@ -170,21 +172,41 @@ def test_group_title_errors_reports_blank_unusable_and_both_duplicate_titles():
 
     assert group_title_errors(state, {"existing": " ", "new-old": "Ltd.", "other": "Other"}) == {
         "existing": "Enter a final company name.",
-        "new-old": "Enter a usable final company name.",
     }
 
     errors = group_title_errors(
         state,
         {"existing": "Same Pte Ltd", "new-old": " same ", "other": "Other"},
     )
+    assert errors == {}
+
+    assert group_title_errors(state, {"existing": "Other Ltd"}) == {}
+
+    state.names["Beta"].selected = True
+    state.names["Beta"].group_id = "new-old"
+    errors = group_title_errors(state, {"existing": "Same Pte Ltd", "new-old": " same "})
     assert errors == {
         "existing": "Another group uses the same final company name.",
         "new-old": "Another group uses the same final company name.",
     }
 
-    assert group_title_errors(state, {"existing": "Other Ltd"}) == {
-        "existing": "Another group uses the same final company name."
-    }
+
+def test_every_local_group_title_error_also_blocks_board_validation():
+    state = board()
+    state.names["Beta"].selected = True
+    state.names["Beta"].group_id = "new-old"
+
+    for proposed in (
+        {"existing": "", "new-old": "New Group"},
+        {"existing": "Ltd.", "new-old": "New Group"},
+        {"existing": "Same", "new-old": "same Pte Ltd"},
+    ):
+        local_errors = group_title_errors(state, proposed)
+        candidate = deepcopy(state)
+        apply_group_titles(candidate, proposed)
+
+        assert local_errors
+        assert validate_board(candidate)
 
 
 def test_direct_member_callbacks_move_between_tray_and_separate():
@@ -452,6 +474,17 @@ def test_semantic_preview_uses_blue_exact_and_gold_suggested_pills():
     assert 'aria-label="Exact match: Alpha"' in preview
     assert 'background:#FFD166' in preview
     assert 'aria-label="Suggested match: alpha"' in preview
+
+
+def test_semantic_pill_escapes_name_and_exposes_source_without_color_alone():
+    record = NameRecord('<script>"Alias"</script>', None, "exact", True)
+
+    rendered = semantic_pill(record)
+
+    assert "<script>" not in rendered
+    assert "&lt;script&gt;&quot;Alias&quot;&lt;/script&gt;" in rendered
+    assert 'class="semantic-pill source-exact"' in rendered
+    assert 'aria-label="Exact match: &lt;script&gt;&quot;Alias&quot;&lt;/script&gt;"' in rendered
 
 
 def test_semantic_preview_rejects_invalid_source_actionably():
