@@ -6,6 +6,8 @@ from company_names.models import Group, NameRecord, ReviewBoard
 from company_names.ui import (
     _board_revision,
     _component_containers,
+    _restore_container_ids,
+    _semantic_pill_preview,
     add_selected_names,
     apply_sort_result,
     create_group,
@@ -60,8 +62,8 @@ def test_sortable_uses_opaque_unique_ids_for_case_differing_labels():
     ids = [item["id"] for item in items]
     assert len(ids) == len(set(ids))
     assert not any(item["id"] in {"Alpha", "alpha"} for item in items)
-    assert next(item for item in items if item["name"] == "Alpha")["label"].startswith("🔵")
-    assert next(item for item in items if item["name"] == "alpha")["label"].startswith("🟡")
+    assert next(item for item in items if item["name"] == "Alpha")["label"].startswith("🟦")
+    assert next(item for item in items if item["name"] == "alpha")["label"].startswith("🟨")
 
 
 def test_sortable_moves_names_between_tray_group_and_exclusion():
@@ -100,6 +102,18 @@ def test_duplicate_or_unknown_sortable_item_is_rejected():
 
     with pytest.raises(ValueError, match="every selected name exactly once"):
         apply_sort_result(state, containers)
+
+
+def test_apply_sort_result_requires_each_container_exactly_once():
+    state = board()
+    before = deepcopy(state)
+    containers = sortable_containers(state)
+    containers.pop(2)  # Empty new group can still not disappear transiently.
+
+    with pytest.raises(ValueError, match="board containers"):
+        apply_sort_result(state, containers)
+
+    assert state == before
 
 
 def test_return_to_inventory_is_explicit_and_clears_all_placement_state():
@@ -165,3 +179,68 @@ def test_board_revision_changes_for_non_drag_mutations():
     selected = _board_revision(state)
     state.groups["existing"].canonical_title = "Renamed"
     assert _board_revision(state) != selected
+
+
+def test_selected_name_with_missing_group_is_rejected_actionably():
+    state = board()
+    state.names["Alpha"].group_id = "deleted-group"
+
+    with pytest.raises(ValueError, match="Alpha.*deleted-group"):
+        sortable_containers(state)
+
+
+def test_returned_containers_are_restored_by_opaque_header_not_position():
+    state = board()
+    source = sortable_containers(state)
+    returned = list(reversed(_component_containers(source)))
+
+    restored = _restore_container_ids(returned, source)
+
+    assert [container["id"] for container in restored] == list(
+        reversed([container["id"] for container in source])
+    )
+    apply_sort_result(state, restored)
+    assert state.names["Alpha"].group_id == "existing"
+    assert state.names["Gamma"].group_id is None
+
+
+@pytest.mark.parametrize("mutation", ["tampered", "visible_tampered", "duplicate", "missing"])
+def test_invalid_returned_container_headers_do_not_mutate_board(mutation):
+    state = board()
+    before = deepcopy(state)
+    source = sortable_containers(state)
+    returned = _component_containers(source)
+    if mutation == "tampered":
+        returned[0]["header"] += "x"
+    elif mutation == "visible_tampered":
+        returned[0]["header"] = "Wrong title" + returned[0]["header"][len("Working tray") :]
+    elif mutation == "duplicate":
+        returned[0]["header"] = returned[1]["header"]
+    else:
+        returned.pop()
+
+    with pytest.raises(ValueError, match="board containers"):
+        restored = _restore_container_ids(returned, source)
+        apply_sort_result(state, restored)
+
+    assert state == before
+
+
+def test_semantic_preview_uses_blue_exact_and_gold_suggested_pills():
+    state = board()
+    add_selected_names(state, ["alpha"])
+
+    preview = _semantic_pill_preview(state)
+
+    assert 'background:#8FC5FF' in preview
+    assert 'aria-label="Exact match: Alpha"' in preview
+    assert 'background:#FFD166' in preview
+    assert 'aria-label="Suggested match: alpha"' in preview
+
+
+def test_semantic_preview_rejects_invalid_source_actionably():
+    state = board()
+    state.names["Alpha"].source = "future-value"
+
+    with pytest.raises(ValueError, match="Alpha.*future-value"):
+        _semantic_pill_preview(state)

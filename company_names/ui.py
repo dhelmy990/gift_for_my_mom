@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 import hashlib
+import html
 import json
 from uuid import uuid4
 
@@ -24,7 +25,7 @@ def _item_id(cleaned_name: str) -> str:
 
 
 def _item(record) -> dict[str, str]:
-    icon = "🔵" if record.source == "exact" else "🟡" if record.source == "suggested" else "⚪"
+    icon = "🟦" if record.source == "exact" else "🟨" if record.source == "suggested" else "⬜"
     return {
         "id": _item_id(record.cleaned_name),
         "name": record.cleaned_name,
@@ -63,8 +64,12 @@ def sortable_containers(board: ReviewBoard) -> list[dict[str, object]]:
             if record.group_id is not None
             else WORKING
         )
-        if destination in by_id:
-            by_id[destination]["items"].append(_item(record))
+        if destination not in by_id:
+            raise ValueError(
+                f"Selected name {record.cleaned_name!r} references missing group "
+                f"{record.group_id!r}"
+            )
+        by_id[destination]["items"].append(_item(record))
     return result
 
 
@@ -84,10 +89,22 @@ def apply_sort_result(board: ReviewBoard, containers: list[dict[str, object]]) -
     lookup = {_item_id(name): name for name in selected}
     placements: list[tuple[str, str]] = []
     valid_destinations = {WORKING, EXCLUDED, *(f"group:{group_id}" for group_id in board.groups)}
+    if not isinstance(containers, list):
+        raise ValueError("Sortable result changed the board containers")
+    destinations = [
+        container.get("id") if isinstance(container, dict) else None
+        for container in containers
+    ]
+    if (
+        not all(isinstance(destination, str) for destination in destinations)
+        or
+        len(destinations) != len(valid_destinations)
+        or set(destinations) != valid_destinations
+        or len(set(destinations)) != len(destinations)
+    ):
+        raise ValueError("Sortable result changed the board containers")
     for container in containers:
         destination = container.get("id")
-        if destination not in valid_destinations:
-            raise ValueError("Sortable result contains an unknown destination")
         items = container.get("items")
         if not isinstance(items, list):
             raise ValueError("Sortable result must contain item lists")
@@ -151,6 +168,21 @@ def _component_containers(containers: list[dict[str, object]]) -> list[dict[str,
     ]
 
 
+def _decode_container_id(header: object) -> str:
+    if not isinstance(header, str) or "\u2063" not in header:
+        raise ValueError("Sortable result changed the board containers")
+    encoded = header.rsplit("\u2063", 1)[1]
+    if not encoded or any(character not in {"\u200b", "\u200c"} for character in encoded):
+        raise ValueError("Sortable result changed the board containers")
+    bits = "".join("0" if character == "\u200b" else "1" for character in encoded)
+    if len(bits) % 8:
+        raise ValueError("Sortable result changed the board containers")
+    try:
+        return bytes(int(bits[start : start + 8], 2) for start in range(0, len(bits), 8)).decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("Sortable result changed the board containers") from None
+
+
 def _board_revision(board: ReviewBoard) -> str:
     """Hash server-side state so external mutations remount the React component."""
     value = {
@@ -167,12 +199,51 @@ def _board_revision(board: ReviewBoard) -> str:
 
 
 def _restore_container_ids(result, source):
-    if not isinstance(result, list) or len(result) != len(source):
+    if not isinstance(result, list):
         raise ValueError("Sortable result changed the board containers")
-    return [
-        {"id": original["id"], "header": returned.get("header"), "items": returned.get("items", [])}
-        for original, returned in zip(source, result)
-    ]
+    expected = {str(container["id"]) for container in source}
+    expected_headers = {
+        str(container["id"]): rendered["header"]
+        for container, rendered in zip(source, _component_containers(source))
+    }
+    restored = []
+    for returned in result:
+        if not isinstance(returned, dict):
+            raise ValueError("Sortable result changed the board containers")
+        container_id = _decode_container_id(returned.get("header"))
+        if returned.get("header") != expected_headers.get(container_id):
+            raise ValueError("Sortable result changed the board containers")
+        restored.append(
+            {"id": container_id, "header": returned.get("header"), "items": returned.get("items", [])}
+        )
+    returned_ids = [container["id"] for container in restored]
+    if len(returned_ids) != len(expected) or set(returned_ids) != expected or len(set(returned_ids)) != len(returned_ids):
+        raise ValueError("Sortable result changed the board containers")
+    return restored
+
+
+def _semantic_pill_preview(board: ReviewBoard) -> str:
+    """Accessible color preview compensating for the string-only drag component."""
+    styles = {
+        "exact": ("#8FC5FF", "Exact match"),
+        "suggested": ("#FFD166", "Suggested match"),
+        "unknown": ("#FFFFFF", "Unmatched"),
+    }
+    pills = []
+    for name, record in sorted(board.names.items(), key=lambda item: (item[0].casefold(), item[0])):
+        if not record.selected:
+            continue
+        style = styles.get(record.source)
+        if style is None:
+            raise ValueError(
+                f"Selected name {name!r} has invalid source {record.source!r}"
+            )
+        color, meaning = style
+        pills.append(
+            f'<span class="semantic-pill" style="background:{color}" '
+            f'aria-label="{meaning}: {html.escape(name)}">{html.escape(name)}</span>'
+        )
+    return "".join(pills)
 
 
 def _move_record(board: ReviewBoard, name: str, destination: str) -> None:
@@ -217,12 +288,14 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         .name-review, .name-review * { color: #000 !important; }
         .name-review { background: #fff; border: 3px solid #000; padding: 1rem; }
         .name-review-legend { border: 2px solid #000; padding: .5rem; }
+        .semantic-pill { color:#000 !important; border:2px solid #000; border-radius:999px;
+                         display:inline-block; margin:.25rem; padding:.25rem .6rem; font-weight:700; }
         </style><div class="name-review"><h2>Review company names</h2></div>""",
         unsafe_allow_html=True,
     )
     st.markdown(
         '<div class="name-review-legend" aria-label="Name match legend">'
-        "🔵 Exact database match &nbsp; 🟡 Suggested match &nbsp; ⚪ Unmatched; "
+        "🟦 Exact database match &nbsp; 🟨 Suggested match &nbsp; ⬜ Unmatched; "
         "the exclusion area has a dashed boundary.</div>",
         unsafe_allow_html=True,
     )
@@ -237,9 +310,27 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         args=(board, search_key),
     )
 
+    try:
+        projected_containers = sortable_containers(board)
+    except ValueError as exc:
+        st.error(f"Review state is invalid: {exc}")
+        st.button("Submit final review", disabled=True)
+        return None
+
+    try:
+        preview = _semantic_pill_preview(board)
+    except ValueError as exc:
+        st.error(f"Review state is invalid: {exc}")
+        st.button("Submit final review", disabled=True)
+        return None
+    st.markdown(
+        f'<div aria-label="Selected name color preview">{preview}</div>',
+        unsafe_allow_html=True,
+    )
+
     ordered_groups = [
         board.groups[container["id"].removeprefix("group:")]
-        for container in sortable_containers(board)
+        for container in projected_containers
         if str(container["id"]).startswith("group:")
     ]
     for group in ordered_groups:
