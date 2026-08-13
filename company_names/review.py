@@ -6,9 +6,21 @@ from .cleaning import normalize_lookup_key
 from .models import Group, ReviewBoard, SubmissionPayload
 
 
+def _name_key_errors(board: ReviewBoard) -> list[tuple[str, str]]:
+    return [
+        (
+            name_key,
+            f"Name key {name_key!r} does not match "
+            f"NameRecord.cleaned_name {record.cleaned_name!r}",
+        )
+        for name_key, record in board.names.items()
+        if name_key != record.cleaned_name
+    ]
+
+
 def validate_board(board: ReviewBoard) -> list[str]:
     """Return deterministic descriptions of invalid review state."""
-    errors: list[tuple[str, str]] = []
+    errors = _name_key_errors(board)
     populated_group_ids = {
         record.group_id
         for record in board.names.values()
@@ -17,6 +29,13 @@ def validate_board(board: ReviewBoard) -> list[str]:
 
     for cleaned_name in sorted(board.names):
         record = board.names[cleaned_name]
+        if not record.selected and (record.group_id is not None or record.excluded):
+            errors.append(
+                (
+                    cleaned_name,
+                    f"{cleaned_name} is inventory but still has grouping or exclusion state",
+                )
+            )
         if record.excluded and record.group_id is not None:
             errors.append((cleaned_name, f"{cleaned_name} is both excluded and grouped"))
         if record.group_id is not None and record.group_id not in board.groups:
@@ -42,7 +61,18 @@ def validate_board(board: ReviewBoard) -> list[str]:
 
     groups_by_title: dict[str, list[Group]] = {}
     for group in titled_groups:
-        groups_by_title.setdefault(normalize_lookup_key(group.canonical_title), []).append(group)
+        try:
+            normalized_title = normalize_lookup_key(group.canonical_title)
+        except ValueError:
+            errors.append(
+                (
+                    group.canonical_title,
+                    f"Group {group.id} title {group.canonical_title} "
+                    "cannot form a lookup key",
+                )
+            )
+            continue
+        groups_by_title.setdefault(normalized_title, []).append(group)
     for normalized_title in sorted(groups_by_title):
         duplicates = groups_by_title[normalized_title]
         if len(duplicates) > 1:
@@ -108,6 +138,16 @@ def build_submission(
 
 def aggregate_by_group(rows: pd.DataFrame, board: ReviewBoard) -> pd.DataFrame:
     """Aggregate included input rows under their groups' canonical titles."""
+    name_key_errors = _name_key_errors(board)
+    if name_key_errors:
+        raise ValueError(
+            "\n".join(
+                message
+                for _, message in sorted(
+                    name_key_errors, key=lambda item: (item[0], item[1])
+                )
+            )
+        )
     included = {
         cleaned_name: board.groups[record.group_id].canonical_title
         for cleaned_name, record in board.names.items()

@@ -24,6 +24,66 @@ def test_validate_requires_included_names_to_be_grouped_but_ignores_inventory() 
     assert validate_board(review) == ["MTL is included but ungrouped"]
 
 
+def test_validate_rejects_mismatched_name_keys_deterministically() -> None:
+    first = NameRecord("Zulu record", None, "unknown")
+    second = NameRecord("Alpha record", None, "unknown")
+    forward = ReviewBoard(groups={}, names={"Zulu key": first, "Alpha key": second})
+    reverse = ReviewBoard(groups={}, names={"Alpha key": second, "Zulu key": first})
+
+    expected = [
+        "Name key 'Alpha key' does not match NameRecord.cleaned_name 'Alpha record'",
+        "Name key 'Zulu key' does not match NameRecord.cleaned_name 'Zulu record'",
+    ]
+    assert validate_board(forward) == expected
+    assert validate_board(reverse) == expected
+
+
+def test_build_submission_rejects_a_mismatched_name_key() -> None:
+    review = ReviewBoard(
+        groups={"g": Group("g", "Group", True)},
+        names={
+            "Dictionary identity": NameRecord(
+                "Record identity", "g", "exact", selected=True
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="Dictionary identity.*Record identity"):
+        build_submission(review, {})
+
+
+def test_aggregate_rejects_a_mismatched_name_key() -> None:
+    review = ReviewBoard(
+        groups={"g": Group("g", "Group", True)},
+        names={
+            "Dictionary identity": NameRecord(
+                "Record identity", "g", "exact", selected=True
+            )
+        },
+    )
+    rows = pd.DataFrame(
+        [{"cleaned_name": "Dictionary identity", "rns": 1, "revenue": 2}]
+    )
+
+    with pytest.raises(ValueError, match="Dictionary identity.*Record identity"):
+        aggregate_by_group(rows, review)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        NameRecord("Inventory", "stale-group", "exact"),
+        NameRecord("Inventory", None, "exact", excluded=True),
+    ],
+)
+def test_validate_rejects_stale_state_on_inventory_records(record: NameRecord) -> None:
+    review = board(groups=[Group("stale-group", "Stale", True)], names=[record])
+
+    assert validate_board(review) == [
+        "Inventory is inventory but still has grouping or exclusion state"
+    ]
+
+
 def test_validate_allows_empty_groups_but_requires_titles_for_populated_groups() -> None:
     review = board(
         groups=[Group("populated", "  ", False), Group("empty", "", False)],
@@ -95,6 +155,29 @@ def test_validate_rejects_duplicate_populated_titles_by_normalized_title() -> No
     assert validate_board(review) == [
         "Duplicate populated group title: Kake Hotels-Marketing / kake hotels marketing"
     ]
+
+
+def test_validate_reports_a_populated_title_that_cannot_form_a_lookup_key() -> None:
+    review = board(
+        groups=[Group("suffix", "Ltd", False)],
+        names=[NameRecord("Alias", "suffix", "suggested", selected=True)],
+    )
+
+    assert validate_board(review) == [
+        "Group suffix title Ltd cannot form a lookup key"
+    ]
+
+
+def test_build_submission_rejects_title_that_cannot_form_a_lookup_key() -> None:
+    review = board(
+        groups=[Group("suffix", "Ltd", False)],
+        names=[NameRecord("Alias", "suffix", "suggested", selected=True)],
+    )
+
+    with pytest.raises(
+        ValueError, match="Group suffix title Ltd cannot form a lookup key"
+    ):
+        build_submission(review, {})
 
 
 def test_build_submission_retains_existing_empty_groups_and_omits_new_empty_groups() -> None:
