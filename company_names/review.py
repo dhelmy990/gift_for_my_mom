@@ -114,8 +114,9 @@ def validate_submission(board: ReviewBoard) -> list[str]:
         for record in board.names.values()
     )
     if working_tray_count:
+        name_label = "name" if working_tray_count == 1 else "names"
         errors.append(
-            f"Resolve {working_tray_count} name(s) in the working tray: create a "
+            f"Resolve {working_tray_count} {name_label} in the working tray: create a "
             "combined group or return them to Separate companies."
         )
     return errors

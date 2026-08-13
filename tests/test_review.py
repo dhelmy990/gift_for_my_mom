@@ -92,7 +92,7 @@ def test_materialize_singletons_leaves_grouped_and_excluded_names_unchanged() ->
     [
         (
             [NameRecord("Alpha", None, "unknown", selected=True)],
-            "Resolve 1 name(s) in the working tray: create a combined group or "
+            "Resolve 1 name in the working tray: create a combined group or "
             "return them to Separate companies.",
         ),
         (
@@ -100,7 +100,7 @@ def test_materialize_singletons_leaves_grouped_and_excluded_names_unchanged() ->
                 NameRecord("Zulu", None, "unknown", selected=True),
                 NameRecord("Alpha", None, "unknown", selected=True),
             ],
-            "Resolve 2 name(s) in the working tray: create a combined group or "
+            "Resolve 2 names in the working tray: create a combined group or "
             "return them to Separate companies.",
         ),
     ],
