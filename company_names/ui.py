@@ -250,6 +250,49 @@ def name_status(board: ReviewBoard, cleaned_name: str) -> str:
     return f"{cleaned_name} — {status}"
 
 
+def suggestion_rows(prepared: PreparedReview) -> list[dict[str, object]]:
+    """Return one compact, actionable top match for each eligible report name."""
+    rows: list[dict[str, object]] = []
+    for name in sorted(prepared.suggestions, key=lambda value: (value.casefold(), value)):
+        record = prepared.board.names.get(name)
+        suggestions = prepared.suggestions[name]
+        if record is None or record.source == "exact" or record.group_id is not None or not suggestions:
+            continue
+        top = suggestions[0]
+        if top.group_id not in prepared.board.groups:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "group_id": top.group_id,
+                "canonical_title": top.canonical_title,
+                "score_percent": round(top.score * 100),
+                "reason": top.reason,
+                "suggestion_count": len(suggestions),
+            }
+        )
+    return rows
+
+
+def accept_suggestion(prepared: PreparedReview, cleaned_name: str, group_id: str) -> None:
+    """Apply a matching suggestion only after an explicit user action."""
+    if cleaned_name not in prepared.board.names:
+        raise KeyError(cleaned_name)
+    if group_id not in prepared.board.groups:
+        raise KeyError(group_id)
+    record = prepared.board.names[cleaned_name]
+    if record.source == "exact":
+        raise ValueError("An exact database mapping cannot be replaced by a suggestion")
+    if not any(
+        suggestion.group_id == group_id
+        for suggestion in prepared.suggestions.get(cleaned_name, [])
+    ):
+        raise ValueError("Group is not a suggested match for this company name")
+    record.selected = True
+    record.group_id = group_id
+    record.excluded = False
+
+
 def review_widget_key(request_id: str, *parts: str) -> str:
     """Prevent a new prepared review from inheriting prior widget values."""
     return ":".join(("name_review", str(request_id), *(str(part) for part in parts)))
@@ -600,6 +643,12 @@ def _return_to_separate_callback(board: ReviewBoard, cleaned_name: str) -> None:
     return_to_separate(board, cleaned_name)
 
 
+def _accept_suggestion_callback(
+    prepared: PreparedReview, cleaned_name: str, group_id: str
+) -> None:
+    accept_suggestion(prepared, cleaned_name, group_id)
+
+
 def _move_to_tray_callback(board: ReviewBoard, cleaned_name: str) -> None:
     move_to_tray(board, [cleaned_name])
 
@@ -670,13 +719,6 @@ def render_name_review(
     auth_attempts = _bind_admin_session(st.session_state, admin_password)
     auth_retry_after = auth_attempts.retry_after(time.monotonic())
     request_id = str(prepared.pending_request_id or id(prepared))
-    init_key = review_widget_key(request_id, "initialized")
-    if not st.session_state.get(init_key):
-        for record in board.names.values():
-            if record.source != "exact" and record.group_id is None:
-                record.selected = False
-                record.excluded = False
-        st.session_state[init_key] = True
 
     for warning in prepared.warnings:
         st.warning(warning)
@@ -719,6 +761,42 @@ def render_name_review(
             st.markdown(escaped_names, unsafe_allow_html=True)
         else:
             st.write("No names are currently separate.")
+
+    suggested_rows = suggestion_rows(prepared)
+    if suggested_rows:
+        with st.expander(f"Suggested matches ({len(suggested_rows)})"):
+            st.write(
+                "These are possible matches from previously confirmed groups. "
+                "Nothing moves unless you choose a match."
+            )
+            reason_labels = {
+                "exact": "same normalized name",
+                "semantic": "similar meaning",
+                "fuzzy": "similar spelling",
+                "token": "shared words",
+                "acronym": "matching initials",
+            }
+            for row in suggested_rows:
+                name = str(row["name"])
+                group_id = str(row["group_id"])
+                title = str(row["canonical_title"])
+                columns = st.columns([4, 2])
+                columns[0].write(f"{name} → {title}")
+                columns[0].caption(
+                    f"{row['score_percent']}% match · "
+                    f"{reason_labels.get(str(row['reason']), 'similar name')}"
+                )
+                columns[1].button(
+                    f"Move {name} to {title}",
+                    key=review_widget_key(
+                        request_id,
+                        "accept_suggestion",
+                        _item_id(name),
+                        group_id,
+                    ),
+                    on_click=_accept_suggestion_callback,
+                    args=(prepared, name, group_id),
+                )
 
     original_group_ids = set(prepared.original_mappings.values())
     ordered_groups = [

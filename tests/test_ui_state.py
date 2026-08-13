@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 from company_names.models import Group, NameRecord, ReviewBoard
+from company_names.matching import Suggestion
+from company_names.service import PreparedReview
 from company_names.review import validate_board
 from company_names.ui import (
     SEMANTIC_PILL_CSS,
@@ -42,7 +44,89 @@ from company_names.ui import (
     return_to_separate,
     return_to_inventory,
     sortable_containers,
+    accept_suggestion,
+    suggestion_rows,
 )
+
+
+def _suggestion(group_id: str, title: str, score: float = 0.91) -> Suggestion:
+    return Suggestion(group_id, title, score, "semantic", score, 0.5, 0.4, 0.0)
+
+
+def test_suggestion_rows_are_deterministic_and_show_only_top_actionable_match():
+    state = board()
+    prepared = PreparedReview(
+        board=state,
+        original_mappings={"Alpha": "existing"},
+        suggestions={
+            "Beta": [
+                _suggestion("existing", "Alpha Group", 0.91),
+                _suggestion("new-old", "New Group", 0.72),
+            ],
+            "alpha": [_suggestion("new-old", "New Group", 0.95)],
+            "Missing": [_suggestion("existing", "Alpha Group")],
+        },
+        rows=None,
+        warnings=[],
+        pending_request_id="request-1",
+    )
+
+    assert suggestion_rows(prepared) == [
+        {
+            "name": "alpha",
+            "group_id": "new-old",
+            "canonical_title": "New Group",
+            "score_percent": 95,
+            "reason": "semantic",
+            "suggestion_count": 1,
+        },
+        {
+            "name": "Beta",
+            "group_id": "existing",
+            "canonical_title": "Alpha Group",
+            "score_percent": 91,
+            "reason": "semantic",
+            "suggestion_count": 2,
+        },
+    ]
+
+
+def test_accept_suggestion_explicitly_assigns_name_and_rejects_unknown_target():
+    state = board()
+    prepared = PreparedReview(
+        board=state,
+        original_mappings={},
+        suggestions={"Beta": [_suggestion("existing", "Alpha Group")]},
+        rows=None,
+        warnings=[],
+        pending_request_id="request-1",
+    )
+
+    accept_suggestion(prepared, "Beta", "existing")
+
+    record = state.names["Beta"]
+    assert (record.selected, record.group_id, record.excluded) == (True, "existing", False)
+    with pytest.raises(ValueError, match="not a suggested match"):
+        accept_suggestion(prepared, "Beta", "new-old")
+    with pytest.raises(KeyError):
+        accept_suggestion(prepared, "Missing", "existing")
+
+
+def test_accept_suggestion_never_overrides_an_exact_mapping():
+    state = board()
+    prepared = PreparedReview(
+        board=state,
+        original_mappings={"Alpha": "existing"},
+        suggestions={"Alpha": [_suggestion("new-old", "New Group")]},
+        rows=None,
+        warnings=[],
+        pending_request_id="request-1",
+    )
+
+    with pytest.raises(ValueError, match="exact database mapping"):
+        accept_suggestion(prepared, "Alpha", "new-old")
+
+    assert state.names["Alpha"].group_id == "existing"
 
 
 def test_review_styles_render_css_braces_without_python_interpolation():

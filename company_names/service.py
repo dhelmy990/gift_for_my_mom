@@ -265,7 +265,7 @@ def prepare_review(
             original_mappings[name] = mapping.group_id
         else:
             records[name] = NameRecord(
-                name, None, "suggested" if suggestions[name] else "unknown", selected=True
+                name, None, "suggested" if suggestions[name] else "unknown", selected=False
             )
 
     prepared = PreparedReview(

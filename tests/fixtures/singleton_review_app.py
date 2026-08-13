@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from company_names.models import Group, NameRecord, ReviewBoard
+from company_names.matching import Suggestion
 from company_names.service import PreparedReview, admin_password_digest
 from company_names.ui import render_name_review
 
@@ -44,7 +45,13 @@ def prepared_review(request_id: str) -> PreparedReview:
     return PreparedReview(
         board=board,
         original_mappings={"Stored Alias": group.id},
-        suggestions={},
+        suggestions={
+            "Beta": [
+                Suggestion(
+                    group.id, "Existing", 0.91, "semantic", 0.91, 0.5, 0.4, 0.0
+                )
+            ]
+        },
         rows=rows,
         warnings=[],
         pending_request_id=request_id,

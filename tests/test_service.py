@@ -124,7 +124,7 @@ def test_normalize_identifies_source_and_value_for_suffix_only_company_name():
     assert "empty after cleanup" in message
 
 
-def test_prepare_places_exact_names_and_leaves_unknown_suggestions_in_tray():
+def test_prepare_places_exact_names_and_leaves_unknown_suggestions_separate():
     repo = FakeRepository(
         exact={"Acme": ExactMapping("g1", "Acme Group", "Acme", None)},
         candidates=[Candidate("g1", "Acme Group", "Acme", tuple([1.0] * 384))],
@@ -139,7 +139,7 @@ def test_prepare_places_exact_names_and_leaves_unknown_suggestions_in_tray():
         "Acme", "g1", "exact", selected=True, persisted_name="Acme"
     )
     assert prepared.board.names["Unknown"] == NameRecord(
-        "Unknown", None, "suggested", selected=True
+        "Unknown", None, "suggested", selected=False
     )
     assert prepared.suggestions["Unknown"][0].group_id == "g1"
     assert prepared.original_mappings == {"Acme": "g1"}
@@ -252,6 +252,7 @@ def test_submit_prepared_review_reuses_request_id_after_ambiguous_failure():
     prepared = prepare_review(extracted_rows().iloc[[2]], FakeRepository(), FakeEmbedder())
     prepared.board.groups["temp"] = Group("temp", "Unknown", False)
     prepared.board.names["Unknown"].group_id = "temp"
+    prepared.board.names["Unknown"].selected = True
     repo = AmbiguousRepository()
     with pytest.raises(RuntimeError, match="response lost"):
         submit_prepared_review(prepared, repo, FakeEmbedder())
