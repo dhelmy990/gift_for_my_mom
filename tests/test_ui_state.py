@@ -11,6 +11,8 @@ from company_names.ui import (
     _restore_container_ids,
     _review_styles,
     _move_record,
+    _move_to_tray_callback,
+    _return_to_separate_callback,
     _semantic_pill_preview,
     name_status,
     review_widget_key,
@@ -24,6 +26,7 @@ from company_names.ui import (
     create_group,
     create_combined_group,
     group_creation_error,
+    group_title_errors,
     move_to_tray,
     review_summary,
     return_to_separate,
@@ -159,6 +162,39 @@ def test_group_creation_error_detects_normalized_title_conflict_deterministicall
         "A group named ‘ALPHA_GROUP PTE LTD’ already exists. "
         "Move these names into that group instead."
     )
+
+
+def test_group_title_errors_reports_blank_unusable_and_both_duplicate_titles():
+    state = board()
+    state.groups["other"] = Group("other", "Other", False)
+
+    assert group_title_errors(state, {"existing": " ", "new-old": "Ltd.", "other": "Other"}) == {
+        "existing": "Enter a final company name.",
+        "new-old": "Enter a usable final company name.",
+    }
+
+    errors = group_title_errors(
+        state,
+        {"existing": "Same Pte Ltd", "new-old": " same ", "other": "Other"},
+    )
+    assert errors == {
+        "existing": "Another group uses the same final company name.",
+        "new-old": "Another group uses the same final company name.",
+    }
+
+    assert group_title_errors(state, {"existing": "Other Ltd"}) == {
+        "existing": "Another group uses the same final company name."
+    }
+
+
+def test_direct_member_callbacks_move_between_tray_and_separate():
+    state = board()
+
+    _move_to_tray_callback(state, "Alpha")
+    assert name_status(state, "Alpha") == "Alpha — Working tray"
+
+    _return_to_separate_callback(state, "Alpha")
+    assert name_status(state, "Alpha") == "Alpha — Separate company"
 
 
 def test_create_combined_group_moves_all_tray_names_and_preserves_metadata():

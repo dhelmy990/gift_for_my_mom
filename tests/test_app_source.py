@@ -26,12 +26,15 @@ def test_name_review_uses_plain_language_singleton_first_copy():
     for phrase in (
         "1. Find names  →  2. Combine duplicates  →  3. Review and save",
         "Separate companies",
-        "Names left here will be saved as separate companies automatically.",
+        "Names left under Separate companies will be saved separately automatically.",
         "View separate companies (",
         "Working tray",
         "Combined groups",
         "Left out of this report",
         "Final company name",
+        '"Name"',
+        '"Move to"',
+        '"Move"',
         "Move a company name",
         "Save mappings and show totals",
         "Backup and recovery",
@@ -47,3 +50,8 @@ def test_name_review_uses_plain_language_singleton_first_copy():
         '"Accessible name movement controls"',
     ):
         assert old_phrase not in source
+
+    assert 'review_widget_key(request_id, "final_company_name")' in source
+    assert 'review_widget_key(request_id, "new_group_title")' not in source
+    assert '"Return to separate"' in source
+    assert '"Move to tray"' in source

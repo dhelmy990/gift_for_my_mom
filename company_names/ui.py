@@ -251,6 +251,39 @@ def apply_group_titles(board: ReviewBoard, values: dict[str, str]) -> None:
         board.groups[group_id].canonical_title = title
 
 
+def group_title_errors(board: ReviewBoard, values: dict[str, str]) -> dict[str, str]:
+    """Validate proposed group titles together so duplicate errors are symmetric."""
+    errors: dict[str, str] = {}
+    normalized: dict[str, str] = {}
+    effective_titles = {
+        group_id: values.get(group_id, group.canonical_title)
+        for group_id, group in board.groups.items()
+    }
+    for group_id in values:
+        if group_id not in board.groups:
+            raise KeyError(group_id)
+    for group_id, title in effective_titles.items():
+        if not title.strip():
+            if group_id in values:
+                errors[group_id] = "Enter a final company name."
+            continue
+        try:
+            normalized[group_id] = normalize_lookup_key(title.strip())
+        except ValueError:
+            if group_id in values:
+                errors[group_id] = "Enter a usable final company name."
+
+    ids_by_title: dict[str, list[str]] = {}
+    for group_id, normalized_title in normalized.items():
+        ids_by_title.setdefault(normalized_title, []).append(group_id)
+    for group_ids in ids_by_title.values():
+        if len(group_ids) > 1:
+            for group_id in group_ids:
+                if group_id in values:
+                    errors[group_id] = "Another group uses the same final company name."
+    return errors
+
+
 def return_to_separate(board: ReviewBoard, cleaned_name: str) -> None:
     """Return one report name to the separate-company list."""
     if cleaned_name not in board.names:
@@ -479,6 +512,14 @@ def _create_group_from_widget(board: ReviewBoard, widget_key: str) -> None:
     st.session_state[widget_key] = ""
 
 
+def _return_to_separate_callback(board: ReviewBoard, cleaned_name: str) -> None:
+    return_to_separate(board, cleaned_name)
+
+
+def _move_to_tray_callback(board: ReviewBoard, cleaned_name: str) -> None:
+    move_to_tray(board, [cleaned_name])
+
+
 def _bind_admin_session(session_state, expected_password: str | None) -> AuthAttemptState:
     """Invalidate authorization when configuration changes and return its throttle."""
     digest = admin_password_digest(expected_password)
@@ -574,7 +615,7 @@ def render_name_review(
 
     separate_names = separate_company_names(board)
     st.markdown(f"### Separate companies ({len(separate_names)})")
-    st.write("Names left here will be saved as separate companies automatically.")
+    st.write("Names left under Separate companies will be saved separately automatically.")
     with st.expander(f"View separate companies ({len(separate_names)})"):
         if separate_names:
             escaped_names = "".join(
@@ -594,17 +635,53 @@ def render_name_review(
         )
     ]
     st.subheader("2. Combine duplicates")
+    tray_names = sorted(_tray_names(board), key=lambda value: (value.casefold(), value))
+    st.markdown(f"### Working tray ({len(tray_names)})")
+    if not tray_names:
+        st.write("Search for duplicate names to add them here.")
+    for name in tray_names:
+        columns = st.columns([4, 1])
+        columns[0].write(name)
+        columns[1].button(
+            "Return to separate",
+            key=review_widget_key(request_id, "return_to_separate", _item_id(name)),
+            on_click=_return_to_separate_callback,
+            args=(board, name),
+        )
+
     st.markdown("### Combined groups")
     title_values = {}
+    title_error_slots = {}
     for group in ordered_groups:
         title_values[group.id] = st.text_input(
             f"Final company name for {group.canonical_title.strip() or 'untitled group'}",
             value=group.canonical_title,
             key=review_widget_key(request_id, "group_title", group.id),
         )
+        title_error_slots[group.id] = st.empty()
+        member_names = sorted(
+            (
+                name
+                for name, record in board.names.items()
+                if record.selected and not record.excluded and record.group_id == group.id
+            ),
+            key=lambda value: (value.casefold(), value),
+        )
+        for name in member_names:
+            columns = st.columns([4, 1])
+            columns[0].write(name)
+            columns[1].button(
+                "Move to tray",
+                key=review_widget_key(request_id, "move_to_tray", group.id, _item_id(name)),
+                on_click=_move_to_tray_callback,
+                args=(board, name),
+            )
+    title_errors = group_title_errors(board, title_values)
+    for group_id, error in title_errors.items():
+        title_error_slots[group_id].error(error)
     apply_group_titles(board, title_values)
 
-    title_key = review_widget_key(request_id, "new_group_title")
+    title_key = review_widget_key(request_id, "final_company_name")
     new_title = st.text_input(
         "Final company name",
         placeholder="Type the name this combined group should use",
@@ -672,7 +749,7 @@ def render_name_review(
 
     with st.expander("Move a company name", expanded=True):
         chosen = st.selectbox(
-            "Company name",
+            "Name",
             options=[""] + search_options(board),
             key=review_widget_key(request_id, "move_name"),
         )
@@ -685,12 +762,12 @@ def render_name_review(
                 for group in _display_groups(board)
             }
             destination = st.selectbox(
-                "Destination",
+                "Move to",
                 destinations,
                 format_func=lambda value: labels.get(value, value),
                 key=review_widget_key(request_id, "move_destination"),
             )
-            if st.button("Move company name", key=review_widget_key(request_id, "move")):
+            if st.button("Move", key=review_widget_key(request_id, "move")):
                 _move_record(board, chosen, destination)
                 st.rerun()
 
