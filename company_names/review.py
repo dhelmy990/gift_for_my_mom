@@ -49,6 +49,12 @@ def materialize_singletons(
                 group_ids_by_title.get(normalize_lookup_key(cleaned_name), [])
             )
             original_group_id = persisted_origins.get(cleaned_name)
+            if original_group_id in all_matching_group_ids:
+                raise ValueError(
+                    f"Cannot return {cleaned_name} to Separate companies because its "
+                    "current group has the same title. Rename the existing group "
+                    "before separating this name."
+                )
             matching_group_ids = [
                 group_id
                 for group_id in all_matching_group_ids
@@ -64,12 +70,6 @@ def materialize_singletons(
                 record.selected = True
                 record.group_id = matching_group_ids[0]
                 continue
-            if original_group_id in all_matching_group_ids:
-                raise ValueError(
-                    f"Cannot return {cleaned_name} to Separate companies because its "
-                    "current group has the same title. Rename the existing group "
-                    "before separating this name."
-                )
 
             group_id = singleton_group_id(cleaned_name)
             existing_group = materialized.groups.get(group_id)

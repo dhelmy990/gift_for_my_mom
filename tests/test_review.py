@@ -141,6 +141,26 @@ def test_materialize_singletons_does_not_reuse_a_separated_names_original_group(
         materialize_singletons(review, {"Alpha Travel": "original"})
 
 
+def test_materialize_singletons_rejects_original_title_before_other_match() -> None:
+    review = board(
+        groups=[
+            Group("other", "alpha-travel", False),
+            Group("original", "Alpha Travel", True),
+        ],
+        names=[NameRecord("Alpha Travel", None, "exact")],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Cannot return Alpha Travel to Separate companies because its current "
+            "group has the same title. Rename the existing group before separating "
+            "this name."
+        ),
+    ):
+        materialize_singletons(review, {"Alpha Travel": "original"})
+
+
 def test_materialize_singletons_rejects_a_conflicting_derived_group_id() -> None:
     singleton_id = singleton_group_id("Alpha Travel")
     review = board(
