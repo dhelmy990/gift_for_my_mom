@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from uuid import uuid4
 
 import pandas as pd
 
 from .cleaning import clean_company_name
-from .matching import EmbeddingProvider, Suggestion, rank_candidates
+from .matching import EMBEDDING_DIMENSION, EmbeddingProvider, Suggestion, rank_candidates
 from .models import Group, NameRecord, ReviewBoard
 from .repository import MappingRepository
 from .review import build_submission
@@ -72,12 +73,15 @@ def normalize_extracted_rows(rows: pd.DataFrame) -> pd.DataFrame:
 
     if not normalized:
         raise ServiceValidationError("No actionable company rows were extracted")
-    return (
+    result = (
         pd.DataFrame(normalized)
         .groupby("cleaned_name", as_index=False, sort=False)[["rns", "revenue"]]
         .sum()
         .astype({"rns": float, "revenue": float})
     )
+    if not result[["rns", "revenue"]].map(math.isfinite).all().all():
+        raise ServiceValidationError("Grouped aggregate contains a non-finite numeric value")
+    return result
 
 
 def collate_extracted_rows(frames: list[pd.DataFrame]) -> pd.DataFrame:
@@ -125,9 +129,7 @@ def prepare_review(
     warnings: list[str] = []
     if unknown_names:
         try:
-            embedded = embedder.embed(unknown_names)
-            if len(embedded) != len(unknown_names):
-                raise ValueError("embedding count mismatch")
+            embedded = _embed_batched(embedder, unknown_names)
             query_vectors = embedded
         except Exception:
             warnings.append(
@@ -152,7 +154,7 @@ def prepare_review(
 
     return PreparedReview(
         ReviewBoard(groups, records), original_mappings, suggestions,
-        normalized_rows, warnings,
+        normalized_rows, warnings, str(uuid4()),
     )
 
 
@@ -163,6 +165,9 @@ def _embed_batched(embedder: EmbeddingProvider, texts: list[str]) -> list[list[f
         embedded = embedder.embed(batch)
         if len(embedded) != len(batch):
             raise ValueError("embedding provider returned the wrong number of vectors")
+        for vector in embedded:
+            if len(vector) != EMBEDDING_DIMENSION or not all(math.isfinite(value) for value in vector):
+                raise ValueError("embedding provider returned an invalid vector")
         vectors.extend(embedded)
     return vectors
 
@@ -175,6 +180,10 @@ def submit_review(
     request_id: str | None = None,
 ) -> dict[str, str]:
     """Embed changed data and persist one atomic review payload."""
+    if request_id is None:
+        raise ServiceValidationError(
+            "A stable request_id is required; use submit_prepared_review for prepared state"
+        )
     payload = build_submission(board, original_mappings, request_id=request_id)
     persisted_groups = {group.id: group for group in repository.list_groups()}
     changed_groups = [
@@ -197,3 +206,20 @@ def submit_review(
     for mapping, vector in zip(changed_mappings, vectors[split:]):
         mapping["member_embedding"] = vector
     return repository.submit(payload)
+
+
+def submit_prepared_review(
+    prepared: PreparedReview,
+    repository: MappingRepository,
+    embedder: EmbeddingProvider,
+) -> dict[str, str]:
+    """Submit prepared state with its stable idempotency key."""
+    if not prepared.pending_request_id:
+        raise ServiceValidationError("Prepared review has no pending request id")
+    return submit_review(
+        prepared.board,
+        prepared.original_mappings,
+        repository,
+        embedder,
+        request_id=prepared.pending_request_id,
+    )

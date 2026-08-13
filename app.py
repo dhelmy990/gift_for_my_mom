@@ -63,6 +63,10 @@ if uploaded_files:
                     df = extract_all_tables(exclude_lowercase, tmp_path)
                     os.unlink(tmp_path)
 
+                    issue_count = len(df.attrs.get("parse_issues", []))
+                    if issue_count:
+                        st.warning(f"{uploaded_file.name}: skipped {issue_count} malformed data block(s).")
+
                     if df is not None and not df.empty:
                         all_dfs.append(df)
                     else:

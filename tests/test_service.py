@@ -9,6 +9,7 @@ from company_names.service import (
     collate_extracted_rows,
     normalize_extracted_rows,
     prepare_review,
+    submit_prepared_review,
     submit_review,
 )
 
@@ -136,6 +137,48 @@ def test_prepare_falls_back_to_fuzzy_suggestions_when_embedding_fails():
     assert prepared.suggestions["Unknown"][0].group_id == "g1"
     assert prepared.warnings
     assert "embedding" in prepared.warnings[0].lower()
+
+
+def test_prepare_batches_unknown_embeddings_and_preserves_order():
+    rows = pd.DataFrame({"agent_name": [f"Name {i} X" for i in range(257)], "rns": 1, "revenue": 1})
+    embedder = FakeEmbedder()
+    prepare_review(rows, FakeRepository(), embedder)
+    assert [len(call) for call in embedder.calls] == [128, 128, 1]
+    assert [name for call in embedder.calls for name in call] == [f"Name {i} X" for i in range(257)]
+
+
+def test_prepare_falls_back_for_invalid_embedding_dimension():
+    class BadEmbedder(FakeEmbedder):
+        def embed(self, texts):
+            self.calls.append(texts)
+            return [[1.0] for _ in texts]
+    prepared = prepare_review(extracted_rows().iloc[[2]], FakeRepository(), BadEmbedder())
+    assert prepared.warnings
+    assert prepared.suggestions["Unknown"] == []
+
+
+def test_submit_prepared_review_reuses_request_id_after_ambiguous_failure():
+    class AmbiguousRepository(FakeRepository):
+        def submit(self, payload):
+            self.submissions.append(payload)
+            if len(self.submissions) == 1:
+                raise RuntimeError("response lost")
+            return {}
+    prepared = prepare_review(extracted_rows().iloc[[2]], FakeRepository(), FakeEmbedder())
+    prepared.board.groups["temp"] = Group("temp", "Unknown", False)
+    prepared.board.names["Unknown"].group_id = "temp"
+    repo = AmbiguousRepository()
+    with pytest.raises(RuntimeError, match="response lost"):
+        submit_prepared_review(prepared, repo, FakeEmbedder())
+    submit_prepared_review(prepared, repo, FakeEmbedder())
+    assert prepared.pending_request_id
+    assert [p.request_id for p in repo.submissions] == [prepared.pending_request_id] * 2
+
+
+def test_normalize_rejects_nonfinite_grouped_totals():
+    rows = pd.DataFrame({"agent_name": ["Acme", "Acme Ltd"], "rns": [1e308, 1e308], "revenue": [1, 1]})
+    with pytest.raises(ServiceValidationError, match="aggregate"):
+        normalize_extracted_rows(rows)
 
 
 def test_submit_embeds_only_changed_titles_and_members_in_one_batch_and_reuses_id():

@@ -2,47 +2,72 @@ import pdfplumber
 import pandas as pd
 import os
 import re
+import math
+from dataclasses import dataclass
 from itertools import takewhile
 
 
 
 DESIRED_ORDER = ["HB", "VLV", "VBN", "HMB", "HMR"]
 
-def parse_agent_text_blocks(text_blocks: list[str], exclude: list[str]) -> pd.DataFrame:
-    """Parse rectangle text without collapsing repeated travel-agent rows."""
+@dataclass(frozen=True)
+class AgentParseIssue:
+    block_index: int
+    reason: str
+    excerpt: str
+
+@dataclass
+class AgentParseResult:
+    rows: pd.DataFrame
+    issues: list[AgentParseIssue]
+
+def _parse_numeric(value: str) -> float:
+    token = value.split()[-1].strip()
+    accounting = token.startswith("(") and token.endswith(")")
+    if accounting:
+        token = token[1:-1]
+    token = re.sub(r"^[\$£€]", "", token).replace(",", "")
+    if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", token):
+        raise ValueError("malformed numeric value")
+    number = float(token)
+    if accounting:
+        number = -number
+    if not math.isfinite(number):
+        raise ValueError("non-finite numeric value")
+    return number
+
+def parse_agent_text_blocks_with_issues(text_blocks: list[str], exclude: list[str]) -> AgentParseResult:
     records = []
+    issues = []
     excluded = [item.casefold() for item in exclude]
-    for text in text_blocks:
+    for block_index, text in enumerate(text_blocks):
+        excerpt = text[:120].replace("\n", " ") if isinstance(text, str) else "<non-text block>"
         if not isinstance(text, str):
+            issues.append(AgentParseIssue(block_index, "block is not text", excerpt))
             continue
         lines = text.split('\n')
         if len(lines) < 3:
+            issues.append(AgentParseIssue(block_index, "expected at least three lines", excerpt))
             continue
         try:
             selected = [lines[index] for index in (0, -3, -1)]
-            name = " ".join(takewhile(
-                lambda word: not any(character.isdigit() for character in word),
-                selected[0].split(),
-            ))
+            name = " ".join(takewhile(lambda word: not any(c.isdigit() for c in word), selected[0].split()))
             if not name:
                 name = selected[0].split()[0]
             if any(item in name.casefold() for item in excluded):
                 continue
-            numeric = []
-            for value in selected[1:]:
-                token = value.split()[-1]
-                numeric.append(float(re.sub(r'[^\d.]', '', token)))
-        except (IndexError, TypeError, ValueError):
+            numeric = [_parse_numeric(value) for value in selected[1:]]
+        except (IndexError, TypeError, ValueError) as error:
+            issues.append(AgentParseIssue(block_index, str(error), excerpt))
             continue
-        records.append({
-            "TRAVEL AGENT": name,
-            "Sum of RNS": numeric[0],
-            "Sum of R REVENUE": numeric[1],
-        })
-    return pd.DataFrame(
-        records,
-        columns=["TRAVEL AGENT", "Sum of RNS", "Sum of R REVENUE"],
-    )
+        records.append({"TRAVEL AGENT": name, "Sum of RNS": numeric[0], "Sum of R REVENUE": numeric[1]})
+    rows = pd.DataFrame(records, columns=["TRAVEL AGENT", "Sum of RNS", "Sum of R REVENUE"])
+    rows.attrs["parse_issues"] = issues
+    return AgentParseResult(rows, issues)
+
+def parse_agent_text_blocks(text_blocks: list[str], exclude: list[str]) -> pd.DataFrame:
+    """Parse rectangle text without collapsing repeated travel-agent rows."""
+    return parse_agent_text_blocks_with_issues(text_blocks, exclude).rows
 
 def extract_all_tables(exclude : list, pdf_path="./CAROLINE FEBRUARY/JANUARY 2026/VLV.PDF"):
     text_blocks = []
