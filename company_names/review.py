@@ -27,9 +27,13 @@ def singleton_group_id(cleaned_name: str) -> str:
     return f"new-singleton-{digest}"
 
 
-def materialize_singletons(board: ReviewBoard) -> ReviewBoard:
+def materialize_singletons(
+    board: ReviewBoard,
+    original_mappings: dict[str, str] | None = None,
+) -> ReviewBoard:
     """Copy a board and turn Separate-company records into singleton groups."""
     materialized = deepcopy(board)
+    persisted_origins = original_mappings or {}
     group_ids_by_title: dict[str, list[str]] = {}
     for group_id, group in materialized.groups.items():
         try:
@@ -41,9 +45,15 @@ def materialize_singletons(board: ReviewBoard) -> ReviewBoard:
     for cleaned_name in sorted(materialized.names):
         record = materialized.names[cleaned_name]
         if not record.selected and not record.excluded and record.group_id is None:
-            matching_group_ids = sorted(
+            all_matching_group_ids = sorted(
                 group_ids_by_title.get(normalize_lookup_key(cleaned_name), [])
             )
+            original_group_id = persisted_origins.get(cleaned_name)
+            matching_group_ids = [
+                group_id
+                for group_id in all_matching_group_ids
+                if group_id != original_group_id
+            ]
             if len(matching_group_ids) > 1:
                 matches = ", ".join(matching_group_ids)
                 raise ValueError(
@@ -54,6 +64,12 @@ def materialize_singletons(board: ReviewBoard) -> ReviewBoard:
                 record.selected = True
                 record.group_id = matching_group_ids[0]
                 continue
+            if original_group_id in all_matching_group_ids:
+                raise ValueError(
+                    f"Cannot return {cleaned_name} to Separate companies because its "
+                    "current group has the same title. Rename the existing group "
+                    "before separating this name."
+                )
 
             group_id = singleton_group_id(cleaned_name)
             existing_group = materialized.groups.get(group_id)
@@ -167,7 +183,7 @@ def build_submission(
     if errors:
         raise ValueError("\n".join(errors))
 
-    materialized = materialize_singletons(board)
+    materialized = materialize_singletons(board, original_mappings)
     errors = validate_board(materialized)
     if errors:
         raise ValueError("\n".join(errors))

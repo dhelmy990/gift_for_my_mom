@@ -124,6 +124,23 @@ def test_materialize_singletons_rejects_multiple_matching_group_titles() -> None
         materialize_singletons(review)
 
 
+def test_materialize_singletons_does_not_reuse_a_separated_names_original_group() -> None:
+    review = board(
+        groups=[Group("original", "Alpha Travel", True)],
+        names=[NameRecord("Alpha Travel", None, "exact")],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Cannot return Alpha Travel to Separate companies because its current "
+            "group has the same title. Rename the existing group before separating "
+            "this name."
+        ),
+    ):
+        materialize_singletons(review, {"Alpha Travel": "original"})
+
+
 def test_materialize_singletons_rejects_a_conflicting_derived_group_id() -> None:
     singleton_id = singleton_group_id("Alpha Travel")
     review = board(
@@ -455,6 +472,23 @@ def test_build_submission_reuses_matching_empty_existing_group(
         {"cleaned_name": cleaned_name, "group_id": "existing"}
     ]
     assert payload.unmap_names == []
+
+
+def test_build_submission_rejects_silent_reuse_of_separated_original_group() -> None:
+    review = board(
+        groups=[Group("original", "Alpha Travel", True)],
+        names=[NameRecord("Alpha Travel", None, "exact")],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Cannot return Alpha Travel to Separate companies because its current "
+            "group has the same title. Rename the existing group before separating "
+            "this name."
+        ),
+    ):
+        build_submission(review, {"Alpha Travel": "original"})
 
 
 def test_build_submission_keeps_unchanged_exact_mapping_without_unmapping() -> None:
