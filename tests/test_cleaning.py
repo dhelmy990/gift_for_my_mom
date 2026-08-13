@@ -48,6 +48,13 @@ def test_clean_company_name_preserves_ambiguous_co_words(name: str) -> None:
     assert clean_company_name(name) == name
 
 
+def test_clean_company_name_does_not_treat_compass_prefix_as_co_suffix() -> None:
+    assert (
+        clean_company_name("COMPASS TRAVEL & TOUR PTE LTD")
+        == "COMPASS TRAVEL & TOUR"
+    )
+
+
 def test_clean_company_name_removes_suffix_wrapper_punctuation() -> None:
     assert clean_company_name("Acme (Pte Ltd)") == "Acme"
 

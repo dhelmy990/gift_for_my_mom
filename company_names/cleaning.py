@@ -10,7 +10,7 @@ _SUFFIX_RE = re.compile(
     r"(?<!\w)(?:"
     r"(?i:co\s*\.?\s*,?\s*ltd\.?|pte\s+ltd\.?|sdn\s+bhd\.?|"
     r"limited\.?|gmbh\.?|ltd\.?|pte\.?)|"
-    r"(?i:co\.?)(?=$|[^\w-]|[A-Z]|[^\x00-\x7f]))"
+    r"(?i:co\.?)(?=$|[^\w-]))"
 )
 
 
