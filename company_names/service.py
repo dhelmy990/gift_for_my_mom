@@ -98,7 +98,10 @@ def submission_fingerprint(board: ReviewBoard) -> str:
             for group in board.groups.values()
         ),
         "names": sorted(
-            (key, record.cleaned_name, record.group_id, record.selected, record.excluded)
+            (
+                key, record.cleaned_name, record.group_id, record.selected,
+                record.excluded, record.persisted_name,
+            )
             for key, record in board.names.items()
         ),
     }
@@ -233,7 +236,10 @@ def prepare_review(
     for name in names:
         mapping = exact.get(name)
         if mapping is not None:
-            records[name] = NameRecord(name, mapping.group_id, "exact", selected=True)
+            records[name] = NameRecord(
+                name, mapping.group_id, "exact", selected=True,
+                persisted_name=mapping.member_name,
+            )
             original_mappings[name] = mapping.group_id
         else:
             records[name] = NameRecord(
@@ -305,9 +311,15 @@ def _prepare_submission_payload(
         or group["id"] not in persisted_groups
         or persisted_groups[group["id"]] != group["canonical_title"]
     )]
+    unchanged_storage_mappings = {
+        (record.persisted_name or record.cleaned_name, original_mappings[report_name])
+        for report_name, record in board.names.items()
+        if report_name in original_mappings
+    }
     changed_mappings = [
         mapping for mapping in payload.mappings
-        if original_mappings.get(mapping["cleaned_name"]) != mapping["group_id"]
+        if (mapping["cleaned_name"], mapping["group_id"])
+        not in unchanged_storage_mappings
     ]
     texts = [str(group["canonical_title"]) for group in changed_groups] + [
         str(mapping["cleaned_name"]) for mapping in changed_mappings
@@ -394,6 +406,8 @@ def _refresh_original_mappings(prepared: PreparedReview) -> None:
             prepared.original_mappings.pop(name, None)
         elif not record.excluded and record.group_id is not None:
             prepared.original_mappings[name] = record.group_id
+            if record.persisted_name is None:
+                record.persisted_name = record.cleaned_name
 
 
 def submit_review_authorized(

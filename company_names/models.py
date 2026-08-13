@@ -19,6 +19,7 @@ class NameRecord:
     source: Literal["exact", "suggested", "unknown"]
     selected: bool = False
     excluded: bool = False
+    persisted_name: str | None = None
 
 
 @dataclass

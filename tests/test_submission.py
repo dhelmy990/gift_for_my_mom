@@ -313,6 +313,18 @@ def test_success_resolves_temporary_ids_without_losing_names_or_groups():
     assert prepared.original_mappings["Acme"] == resolved
 
 
+def test_success_marks_a_new_alias_with_its_persisted_identity():
+    prepared = prepared_review()
+    resolved = "22222222-2222-4222-8222-222222222222"
+
+    outcome = submit_review_authorized(
+        prepared, Repository([{"new-local": resolved}]), Embedder(), "pw", "pw"
+    )
+
+    assert outcome.success
+    assert prepared.board.names["Acme"].persisted_name == "Acme"
+
+
 def test_embedding_failure_submits_without_vectors_with_warning():
     prepared = prepared_review()
     repo = Repository()

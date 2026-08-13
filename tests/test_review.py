@@ -248,6 +248,54 @@ def test_build_submission_only_unmaps_original_names_deliberately_returned_to_in
     assert payload.unmap_names == ["Inventory"]
 
 
+def test_build_submission_preserves_persisted_identity_for_an_exact_alias() -> None:
+    review = board(
+        groups=[Group("g", "Miki", True)],
+        names=[
+            NameRecord(
+                "Miki Travel", "g", "exact", selected=True,
+                persisted_name="Miki-Travel",
+            )
+        ],
+    )
+
+    payload = build_submission(review, {"Miki Travel": "g"})
+
+    assert payload.mappings == [{"cleaned_name": "Miki-Travel", "group_id": "g"}]
+
+
+def test_build_submission_unmaps_the_persisted_identity_of_an_exact_alias() -> None:
+    review = board(
+        groups=[Group("g", "Miki", True)],
+        names=[NameRecord("Miki Travel", None, "exact", persisted_name="Miki-Travel")],
+    )
+
+    payload = build_submission(review, {"Miki Travel": "g"})
+
+    assert payload.unmap_names == ["Miki-Travel"]
+
+
+def test_aggregate_uses_report_identity_when_exact_alias_has_persisted_identity() -> None:
+    review = board(
+        groups=[Group("g", "Miki", True)],
+        names=[
+            NameRecord(
+                "Miki Travel", "g", "exact", selected=True,
+                persisted_name="Miki-Travel",
+            )
+        ],
+    )
+    rows = pd.DataFrame(
+        [{"cleaned_name": "Miki Travel", "rns": 2.0, "revenue": 8.0}]
+    )
+
+    result = aggregate_by_group(rows, review)
+
+    assert result.to_dict("records") == [
+        {"TRAVEL AGENT": "Miki", "Sum of RNS": 2.0, "Sum of R REVENUE": 8.0}
+    ]
+
+
 def test_build_submission_rejects_direct_remapping() -> None:
     review = board(
         groups=[Group("old", "Old", True), Group("new", "New", True)],

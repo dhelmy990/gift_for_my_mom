@@ -108,7 +108,7 @@ def test_prepare_places_exact_names_and_leaves_unknown_suggestions_in_tray():
 
     assert prepared.board.groups == {"g1": Group("g1", "Acme Group", True)}
     assert prepared.board.names["Acme"] == NameRecord(
-        "Acme", "g1", "exact", selected=True
+        "Acme", "g1", "exact", selected=True, persisted_name="Acme"
     )
     assert prepared.board.names["Unknown"] == NameRecord(
         "Unknown", None, "suggested", selected=True
@@ -116,6 +116,23 @@ def test_prepare_places_exact_names_and_leaves_unknown_suggestions_in_tray():
     assert prepared.suggestions["Unknown"][0].group_id == "g1"
     assert prepared.original_mappings == {"Acme": "g1"}
     assert embedder.calls == [["Unknown"]]
+
+
+def test_prepare_keeps_report_identity_separate_from_persisted_exact_alias():
+    repo = FakeRepository(
+        exact={
+            "Miki Travel": ExactMapping("g1", "Miki", "Miki-Travel", None)
+        },
+        groups=[GroupRecord("g1", "Miki", None)],
+    )
+    rows = pd.DataFrame(
+        {"agent_name": ["Miki Travel"], "rns": [2], "revenue": [8]}
+    )
+
+    prepared = prepare_review(rows, repo, FakeEmbedder())
+
+    assert list(prepared.board.names) == ["Miki Travel"]
+    assert prepared.board.names["Miki Travel"].persisted_name == "Miki-Travel"
 
 
 def test_prepare_uses_only_repository_candidates_not_provisional_board_groups():

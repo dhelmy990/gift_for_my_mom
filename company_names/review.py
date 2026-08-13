@@ -125,16 +125,21 @@ def build_submission(
         for group in sorted(board.groups.values(), key=lambda group: group.id)
         if group.existing or group.id in populated_group_ids
     ]
-    mappings = [
-        {"cleaned_name": cleaned_name, "group_id": record.group_id}
-        for cleaned_name, record in sorted(board.names.items())
-        if record.selected and not record.excluded and record.group_id is not None
-    ]
-    unmap_names = [
-        cleaned_name
+    mappings_by_name: dict[str, dict[str, object]] = {}
+    for cleaned_name, record in sorted(board.names.items()):
+        if record.selected and not record.excluded and record.group_id is not None:
+            storage_name = record.persisted_name or cleaned_name
+            mapping = {"cleaned_name": storage_name, "group_id": record.group_id}
+            prior = mappings_by_name.get(storage_name)
+            if prior is not None and prior != mapping:
+                raise ValueError(f"Persisted name {storage_name} has conflicting groups")
+            mappings_by_name[storage_name] = mapping
+    mappings = list(mappings_by_name.values())
+    unmap_names = sorted({
+        record.persisted_name or cleaned_name
         for cleaned_name, record in sorted(board.names.items())
         if cleaned_name in original_mappings and not record.selected
-    ]
+    })
     if request_id is None:
         return SubmissionPayload(groups, mappings, unmap_names)
     return SubmissionPayload(groups, mappings, unmap_names, request_id)
