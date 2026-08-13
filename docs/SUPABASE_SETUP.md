@@ -24,26 +24,30 @@ No hosted service can promise protection from every outage, account deletion, or
 
 ## 2. Create the tables
 
-The final implementation will include a ready-to-run schema file at `supabase/schema.sql`.
-
-Once that file exists:
+This repository includes the ready-to-run schema at `supabase/schema.sql`:
 
 1. Open your Supabase project.
 2. Select **SQL Editor** in the left sidebar.
 3. Select **New query**.
 4. Open `supabase/schema.sql` from this repository.
 5. Copy the entire file into the Supabase query editor.
-6. Select **Run** once.
+6. Select **Run**.
 7. Confirm the result says the command completed successfully.
 
-Running that file will create the vector extension, permanent group and mapping tables, indexes, security settings, and the atomic submission function. Do not invent tables manually before the schema file is available.
+Running the file creates the `vector` and `pgcrypto` extensions; the permanent
+`name_groups`, `name_mappings`, and `submission_ledger` tables; 384-dimensional
+vector columns and indexes; update triggers; row-level security; and the atomic
+`submit_name_review` function. The schema uses `if not exists` and replaceable
+functions/triggers, so run the complete file a second time to verify that it is
+idempotent. Both runs should complete successfully. Do not create the objects
+manually or run isolated fragments.
 
 ## 3. Copy the two server credentials
 
 1. In Supabase, open **Project Settings**.
 2. Open **API** or **Data API**. Supabase may rename this page over time.
 3. Copy the **Project URL**.
-4. Copy the server-side secret key. Depending on the dashboard version, it may be labeled **service_role** or **Secret key**.
+4. Copy the server-side service-role secret key. Depending on the dashboard version, it may be labeled **service_role** or **Secret key**. The app requires this server-side secret.
 
 Important: do not use the public `anon` or publishable key for the server credential. The secret/service-role key can bypass database security and must never be exposed in browser code or committed to GitHub.
 
@@ -86,7 +90,8 @@ To run the app locally against the same Supabase project:
 2. Paste the same three settings from the previous step.
 3. Confirm `.streamlit/secrets.toml` is ignored by Git before committing anything.
 
-The implementation will add the necessary ignore rule. Never commit the local secrets file.
+The repository already ignores `.streamlit/secrets.toml` and tracks only
+`.streamlit/secrets.example.toml`. Never commit the local secrets file.
 
 ## 7. Verify the connection
 
@@ -100,12 +105,17 @@ After the feature is deployed:
 6. Reboot the Streamlit app from Community Cloud.
 7. Process the same test name again.
 8. Confirm it returns in the saved canonical group.
+9. In the review screen, confirm you can move a name between groups, rename a
+   canonical group, exclude an inventory row, and review grouped totals before
+   downloading them.
+10. Confirm controls, focus indicators, and status messages remain readable in the
+    browser's normal and high-contrast/forced-colors display modes.
 
 That reboot check proves the mapping came from Supabase rather than temporary Streamlit storage.
 
 ## 8. Back up mappings
 
-After implementation, an authorized user can download the mapping backup from the app. Save occasional copies somewhere outside both Streamlit and Supabase, such as private cloud storage.
+An authorized user can download the mapping backup from the app. Save occasional copies somewhere outside both Streamlit and Supabase, such as private cloud storage.
 
 The backup has exactly two columns (`cleaned_name,canonical_title`) and is
 spreadsheet-safe. Cells that could be interpreted as formulas are encoded using a
@@ -136,8 +146,12 @@ python3 scripts/seed_name_mappings.py company_name_normalization_finetuning.csv 
 ```
 
 The importer derives its request ID from the normalized logical mappings, so retrying
-the same CSV after a lost response reuses the same atomic RPC identity. Embeddings are
-generated in bounded batches of 64 while the database update remains one submission.
+the same CSV after a lost response reuses the same atomic RPC identity. The app also
+retains the request ID when an unchanged UI submission is retried. Supabase records
+completed request IDs in `submission_ledger`; the same request and payload returns its
+previous result, while reuse with a different payload is rejected. Embeddings are
+generated in bounded batches of 64 while the database update remains one atomic
+submission.
 
 The importer does not need `ADMIN_PASSWORD`. Replace the placeholders only in your
 local shell; never put real credentials in this document, the CSV, source code, or
@@ -171,7 +185,10 @@ Git commits.
 
 - Exact permanent mappings and non-vector similarity should still work.
 - Check the Streamlit logs for a FastEmbed model-download or memory error.
-- The first model load can take longer because Streamlit must download and initialize it.
+- FastEmbed uses `BAAI/bge-small-en-v1.5`. The first model load needs outbound
+  network access and can take longer because Streamlit must download and initialize
+  it; later runs use the local cache. The model produces the 384-dimensional vectors
+  required by the schema.
 
 ### Supabase free project is paused
 

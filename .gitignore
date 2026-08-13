@@ -1,4 +1,5 @@
 .streamlit/secrets.toml
+.venv/
 .superpowers/
 __pycache__/
 .pytest_cache/
