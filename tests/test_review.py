@@ -33,6 +33,25 @@ def test_validate_allows_empty_groups_but_requires_titles_for_populated_groups()
     assert validate_board(review) == ["Group populated has a blank canonical title"]
 
 
+def test_validate_orders_blank_populated_group_errors_deterministically() -> None:
+    groups = [
+        Group("group-b", "  ", False),
+        Group("group-a", "  ", False),
+    ]
+    names = [
+        NameRecord("First", "group-a", "suggested", selected=True),
+        NameRecord("Second", "group-b", "suggested", selected=True),
+    ]
+
+    forward_errors = validate_board(board(groups=groups, names=names))
+    reverse_errors = validate_board(board(groups=list(reversed(groups)), names=names))
+
+    assert forward_errors == reverse_errors == [
+        "Group group-a has a blank canonical title",
+        "Group group-b has a blank canonical title",
+    ]
+
+
 def test_validate_rejects_unknown_group_and_excluded_grouped_names_in_name_order() -> None:
     review = board(
         groups=[Group("known", "Known", False)],

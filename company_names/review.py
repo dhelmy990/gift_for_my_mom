@@ -54,7 +54,7 @@ def validate_board(board: ReviewBoard) -> list[str]:
                 )
             )
 
-    return [message for _, message in sorted(errors, key=lambda item: item[0])]
+    return [message for _, message in sorted(errors, key=lambda item: (item[0], item[1]))]
 
 
 def build_submission(
