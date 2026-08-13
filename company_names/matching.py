@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import re
+import threading
 from typing import Protocol
 
 from rapidfuzz.fuzz import WRatio
@@ -29,12 +30,15 @@ class FastEmbeddingProvider:
     def __init__(self, model_name: str = "BAAI/bge-small-en-v1.5") -> None:
         self.model_name = model_name
         self._model = None
+        self._model_lock = threading.Lock()
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if self._model is None:
-            from fastembed import TextEmbedding
+            with self._model_lock:
+                if self._model is None:
+                    from fastembed import TextEmbedding
 
-            self._model = TextEmbedding(self.model_name)
+                    self._model = TextEmbedding(self.model_name)
 
         vectors: list[list[float]] = []
         for raw_vector in self._model.embed(texts):
@@ -44,6 +48,10 @@ class FastEmbeddingProvider:
                     f"expected {EMBEDDING_DIMENSION}-dimensional embedding, got {len(vector)}"
                 )
             vectors.append(vector)
+        if len(vectors) != len(texts):
+            raise ValueError(
+                f"expected {len(texts)} embeddings, got {len(vectors)}"
+            )
         return vectors
 
 
@@ -52,7 +60,11 @@ class Candidate:
     group_id: str
     canonical_title: str
     member_name: str
-    vector: list[float] | None
+    vector: tuple[float, ...] | None
+
+    def __post_init__(self) -> None:
+        if self.vector is not None and not isinstance(self.vector, tuple):
+            object.__setattr__(self, "vector", tuple(self.vector))
 
 
 @dataclass(frozen=True)
@@ -74,7 +86,10 @@ def _acronym(name: str) -> str:
     return "".join(token[0] for token in raw_tokens).casefold()
 
 
-def _cosine(left: list[float] | None, right: list[float] | None) -> float | None:
+def _cosine(
+    left: list[float] | tuple[float, ...] | None,
+    right: list[float] | tuple[float, ...] | None,
+) -> float | None:
     if left is None or right is None or len(left) != len(right) or not left:
         return None
     if not all(math.isfinite(value) for value in (*left, *right)):
@@ -83,9 +98,10 @@ def _cosine(left: list[float] | None, right: list[float] | None) -> float | None
     right_norm = math.hypot(*right)
     if left_norm == 0.0 or right_norm == 0.0:
         return None
-    return math.fsum(
+    cosine = math.fsum(
         (a / left_norm) * (b / right_norm) for a, b in zip(left, right)
     )
+    return min(1.0, max(0.0, (cosine + 1.0) / 2.0))
 
 
 def _exact_priority(query_key: str, candidate: Candidate) -> int:
@@ -138,7 +154,7 @@ def _score_candidate(
     return Suggestion(
         group_id=candidate.group_id,
         canonical_title=candidate.canonical_title,
-        score=weighted / available_weight,
+        score=min(1.0, max(0.0, weighted / available_weight)),
         reason="hybrid",
         vector_score=vector_score,
         fuzzy_score=fuzzy_score,

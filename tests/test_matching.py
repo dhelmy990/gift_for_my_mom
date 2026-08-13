@@ -1,5 +1,9 @@
 import math
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -22,6 +26,24 @@ def candidate(
         member_name=member_name or canonical_title,
         vector=vector,
     )
+
+
+def test_candidate_defensively_freezes_vector_content() -> None:
+    source = [1.0, 2.0]
+    result = candidate("g", "Title", vector=source)
+
+    source[0] = 99.0
+
+    assert result.vector == (1.0, 2.0)
+    with pytest.raises(FrozenInstanceError):
+        result.vector = (3.0,)  # type: ignore[misc]
+
+
+def test_suggestion_fields_cannot_be_assigned() -> None:
+    result = rank_candidates("Title", [candidate("g", "Title")], None)[0]
+
+    with pytest.raises(FrozenInstanceError):
+        result.score = 0.0  # type: ignore[misc]
 
 
 def test_exact_member_match_wins_over_better_vector_match() -> None:
@@ -87,8 +109,27 @@ def test_cosine_similarity_contributes_half_the_nonexact_score() -> None:
         "query", [candidate("g", "different", vector=[2.0, 0.0])], [1.0, 0.0]
     )[0]
 
-    assert aligned.vector_score == pytest.approx(1.0)
-    assert aligned.score - orthogonal.score == pytest.approx(0.5)
+    assert aligned.vector_score == 1.0
+    assert orthogonal.vector_score == pytest.approx(0.5)
+    assert aligned.score - orthogonal.score == pytest.approx(0.25)
+
+
+def test_antiparallel_vectors_map_to_zero_similarity() -> None:
+    result = rank_candidates(
+        "query", [candidate("g", "different", vector=[-1.0, 0.0])], [1.0, 0.0]
+    )[0]
+
+    assert result.vector_score == 0.0
+    assert all(
+        math.isfinite(value) and 0.0 <= value <= 1.0
+        for value in (
+            result.score,
+            result.vector_score,
+            result.fuzzy_score,
+            result.token_score,
+            result.acronym_score,
+        )
+    )
 
 
 @pytest.mark.parametrize("vector", [[1.0], [0.0, 0.0]])
@@ -163,6 +204,20 @@ def test_returns_best_member_per_group_with_stable_tie_order_and_limit() -> None
     assert result[0].canonical_title == "First Group"
 
 
+def test_candidates_are_sorted_by_unequal_scores_descending() -> None:
+    result = rank_candidates(
+        "alpha travel",
+        [
+            candidate("weak", "unrelated widgets"),
+            candidate("strong", "alpha travel services"),
+        ],
+        None,
+    )
+
+    assert [item.group_id for item in result] == ["strong", "weak"]
+    assert result[0].score > result[1].score
+
+
 def test_nonpositive_limit_returns_empty_list() -> None:
     assert rank_candidates("query", [candidate("g", "title")], None, limit=0) == []
 
@@ -190,6 +245,34 @@ def test_provider_constructs_model_only_when_embedding(monkeypatch: pytest.Monke
     assert len(vectors[0]) == 384
 
 
+def test_provider_constructs_model_once_for_concurrent_embedding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed = 0
+    constructed_lock = threading.Lock()
+
+    class FakeModel:
+        def __init__(self, model_name: str) -> None:
+            nonlocal constructed
+            with constructed_lock:
+                constructed += 1
+            time.sleep(0.02)
+
+        def embed(self, texts: list[str]):
+            return [[0.0] * 384 for _ in texts]
+
+    monkeypatch.setitem(
+        sys.modules, "fastembed", type("Module", (), {"TextEmbedding": FakeModel})
+    )
+    provider = FastEmbeddingProvider("fake-model")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: provider.embed(["hello"]), range(8)))
+
+    assert constructed == 1
+    assert all(len(result) == 1 for result in results)
+
+
 def test_provider_rejects_wrong_embedding_dimension(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeModel:
         def __init__(self, model_name: str) -> None:
@@ -204,6 +287,25 @@ def test_provider_rejects_wrong_embedding_dimension(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(ValueError, match="384"):
         FastEmbeddingProvider().embed(["hello"])
+
+
+@pytest.mark.parametrize("returned_count", [1, 3])
+def test_provider_rejects_wrong_embedding_count(
+    monkeypatch: pytest.MonkeyPatch, returned_count: int
+) -> None:
+    class FakeModel:
+        def __init__(self, model_name: str) -> None:
+            pass
+
+        def embed(self, texts: list[str]):
+            return [[0.0] * 384 for _ in range(returned_count)]
+
+    monkeypatch.setitem(
+        sys.modules, "fastembed", type("Module", (), {"TextEmbedding": FakeModel})
+    )
+
+    with pytest.raises(ValueError, match="2 embeddings"):
+        FastEmbeddingProvider().embed(["hello", "world"])
 
 
 @pytest.mark.integration
