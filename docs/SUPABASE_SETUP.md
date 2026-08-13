@@ -51,6 +51,12 @@ Important: do not use the public `anon` or publishable key for the server creden
 
 Choose a password that authorized users will enter before changing permanent mappings. It should be different from your Supabase database password.
 
+Use a unique, high-entropy password of at least 20 characters. The app rate-limits
+failed attempts within each browser session, but this is not a global rate limit:
+an attacker can create new sessions. Restrict access to the deployed app or add
+edge authentication/rate limiting (for example through your hosting or proxy) when
+you need stronger protection.
+
 Anyone may view the deployed app, but only someone with this password should be able to submit permanent mapping changes or download the backup.
 
 ## 5. Configure Streamlit Community Cloud
@@ -100,6 +106,11 @@ That reboot check proves the mapping came from Supabase rather than temporary St
 ## 8. Back up mappings
 
 After implementation, an authorized user can download the mapping backup from the app. Save occasional copies somewhere outside both Streamlit and Supabase, such as private cloud storage.
+
+The backup has exactly two columns (`cleaned_name,canonical_title`) and is
+spreadsheet-safe. Cells that could be interpreted as formulas are prefixed with one
+apostrophe. That apostrophe is export escaping; the seed importer reverses exactly
+this pattern when a backup is restored, while preserving ordinary apostrophes.
 
 Backups are especially sensible before bulk regrouping or renaming canonical groups.
 
@@ -169,6 +180,8 @@ Git commits.
 - Never commit `.streamlit/secrets.toml`.
 - Never expose the service-role/secret key in the UI, logs, screenshots, or chat.
 - Use a separate shared admin password.
+- Use at least 20 high-entropy characters and restrict app access or add edge
+  protection when per-session throttling is insufficient.
 - Change the admin password if it is shared accidentally.
 - Rotate the Supabase secret key if it is exposed.
 - Download periodic mapping backups.

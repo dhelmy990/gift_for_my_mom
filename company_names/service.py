@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import csv
 import hashlib
 import hmac
 import io
 import json
 import math
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pandas as pd
 
@@ -50,6 +51,36 @@ class SubmissionOutcome:
 class BackupOutcome:
     data: bytes | None = None
     error: str | None = None
+
+
+@dataclass
+class AuthAttemptState:
+    """Per-session failed-login throttle with a deterministic clock boundary."""
+
+    failure_count: int = 0
+    locked_until: float = 0.0
+
+    def retry_after(self, now: float) -> int:
+        return max(0, math.ceil(self.locked_until - now))
+
+    def record_failure(self, now: float) -> int:
+        self.failure_count += 1
+        if self.failure_count >= 5:
+            self.locked_until = max(self.locked_until, now + 60.0)
+        return self.retry_after(now)
+
+    def record_success(self) -> None:
+        self.failure_count = 0
+        self.locked_until = 0.0
+
+
+def admin_password_digest(password: object) -> str | None:
+    """Return a non-reversible binding for the currently configured password."""
+    if not isinstance(password, str) or not password:
+        return None
+    return hmac.new(
+        b"company-name-admin-session-v1", password.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
 
 def password_matches(candidate: object, expected: object) -> bool:
@@ -312,6 +343,30 @@ def submit_prepared_review(
     )
 
 
+def _validate_resolved_group_ids(
+    board: ReviewBoard, payload: SubmissionPayload, resolved: dict[str, str]
+) -> None:
+    expected = {str(group["id"]) for group in payload.groups if not group["existing"]}
+    if set(resolved) != expected:
+        raise ValueError("resolution keys did not match newly submitted groups")
+    values: list[str] = []
+    for value in resolved.values():
+        if not isinstance(value, str):
+            raise ValueError("resolved group id was not a UUID string")
+        try:
+            parsed = UUID(value)
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError("resolved group id was not a UUID string") from None
+        if str(parsed) != value:
+            raise ValueError("resolved group id was not a canonical UUID string")
+        values.append(value)
+    if len(values) != len(set(values)):
+        raise ValueError("multiple groups resolved to the same UUID")
+    existing_ids = {group.id for group in board.groups.values() if group.existing}
+    if set(values) & existing_ids:
+        raise ValueError("a new group resolved to an existing board group")
+
+
 def _apply_resolved_group_ids(prepared: PreparedReview, resolved: dict[str, str]) -> None:
     """Replace temporary group IDs after a committed response, preserving all state."""
     for temporary_id, persisted_id in resolved.items():
@@ -377,11 +432,18 @@ def submit_review_authorized(
         return SubmissionOutcome(False, error="Submission failed. Your review was kept; retry safely.")
 
     try:
-        _apply_resolved_group_ids(prepared, resolved)
-        _refresh_original_mappings(prepared)
-        result = aggregate_by_group(prepared.rows, prepared.board)
-    except ValueError as exc:
-        return SubmissionOutcome(False, error=str(exc))
+        _validate_resolved_group_ids(prepared.board, payload, resolved)
+        candidate = deepcopy(prepared)
+        _apply_resolved_group_ids(candidate, resolved)
+        _refresh_original_mappings(candidate)
+        result = aggregate_by_group(candidate.rows, candidate.board)
+    except Exception:
+        return SubmissionOutcome(
+            False,
+            error="Submission committed but response could not be reconciled; retry.",
+        )
+    prepared.board = candidate.board
+    prepared.original_mappings = candidate.original_mappings
     prepared.pending_request_id = str(uuid4())
     prepared.submission_fingerprint = submission_fingerprint(prepared.board)
     prepared.initial_group_titles = {
@@ -410,5 +472,16 @@ def export_backup_csv(
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(["cleaned_name", "canonical_title"])
-    writer.writerows((row.cleaned_name, row.canonical_title) for row in rows)
+    writer.writerows(
+        (csv_safe_cell(row.cleaned_name), csv_safe_cell(row.canonical_title))
+        for row in rows
+    )
     return BackupOutcome(data=output.getvalue().encode("utf-8"))
+
+
+def csv_safe_cell(value: str) -> str:
+    """Neutralize values spreadsheet programs could interpret as formulas."""
+    stripped = value.lstrip()
+    if stripped.startswith(("=", "+", "-", "@")):
+        return "'" + value
+    return value

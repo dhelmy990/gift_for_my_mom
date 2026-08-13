@@ -6,6 +6,7 @@ from company_names.models import Group, NameRecord, ReviewBoard
 from company_names.ui import (
     SEMANTIC_PILL_CSS,
     _board_revision,
+    _bind_admin_session,
     _component_containers,
     _restore_container_ids,
     _semantic_pill_preview,
@@ -21,6 +22,23 @@ from company_names.ui import (
     return_to_inventory,
     sortable_containers,
 )
+
+
+def test_admin_session_unlock_is_bound_to_configured_password_digest():
+    session = {}
+    attempts = _bind_admin_session(session, "first-secret")
+    session["mapping_admin_unlocked"] = True
+    attempts.record_failure(0.0)
+
+    same = _bind_admin_session(session, "first-secret")
+    assert same is attempts
+    assert session["mapping_admin_unlocked"] is True
+
+    changed = _bind_admin_session(session, "rotated-secret")
+    assert session["mapping_admin_unlocked"] is False
+    assert changed.failure_count == 0
+    assert "first-secret" not in repr(session)
+    assert "rotated-secret" not in repr(session)
 
 
 def board() -> ReviewBoard:

@@ -1,9 +1,11 @@
 import pandas as pd
+import pytest
 
 from company_names.models import Group, NameRecord, ReviewBoard
 from company_names.repository import ExportRow, RepositoryUnavailableError
 from company_names.review_session import clear_final_results
 from company_names.service import (
+    AuthAttemptState,
     PreparedReview,
     ensure_submission_identity,
     export_backup_csv,
@@ -24,14 +26,18 @@ class Embedder:
 
 class Repository:
     def __init__(self, responses=None, export=None):
-        self.responses = list(responses or [{}])
+        self.responses = None if responses is None else list(responses)
         self.submissions = []
         self.export = export or []
         self.export_calls = 0
 
     def submit(self, payload):
         self.submissions.append(payload)
-        response = self.responses.pop(0)
+        response = (
+            {group["id"]: "22222222-2222-4222-8222-222222222222" for group in payload.groups if not group["existing"]}
+            if self.responses is None
+            else self.responses.pop(0)
+        )
         if isinstance(response, Exception):
             raise response
         return response
@@ -102,18 +108,76 @@ def test_authorized_valid_submission_is_one_rpc_and_returns_totals():
     ]
 
 
+@pytest.mark.parametrize("response", [
+    {},
+    {"new-local": "22222222-2222-4222-8222-222222222222", "extra": "33333333-3333-4333-8333-333333333333"},
+    {"new-local": "NOT-A-UUID"},
+])
+def test_committed_response_must_exactly_resolve_new_groups_without_mutation(response):
+    prepared = prepared_review()
+    board = prepared.board
+    request_id = prepared.pending_request_id
+    outcome = submit_review_authorized(prepared, Repository([response]), Embedder(), "pw", "pw")
+
+    assert not outcome.success
+    assert outcome.error == "Submission committed but response could not be reconciled; retry."
+    assert prepared.board is board
+    assert prepared.board.names["Acme"].group_id == "new-local"
+    assert prepared.original_mappings == {}
+    assert prepared.pending_request_id == request_id
+
+
+def test_committed_response_rejects_duplicate_or_existing_group_ids_atomically():
+    prepared = prepared_review()
+    prepared.board.groups["other-local"] = Group("other-local", "Other", False)
+    prepared.board.groups["44444444-4444-4444-8444-444444444444"] = Group(
+        "44444444-4444-4444-8444-444444444444", "Existing", True
+    )
+    duplicate = "22222222-2222-4222-8222-222222222222"
+    for response in (
+        {"new-local": duplicate, "other-local": duplicate},
+        {"new-local": "44444444-4444-4444-8444-444444444444", "other-local": duplicate},
+    ):
+        outcome = submit_review_authorized(prepared, Repository([response]), Embedder(), "pw", "pw")
+        assert not outcome.success
+        assert set(prepared.board.groups) == {
+            "new-local", "other-local", "44444444-4444-4444-8444-444444444444"
+        }
+
+
+def test_bad_committed_response_retries_same_request_and_recovers():
+    prepared = prepared_review()
+    resolved = "22222222-2222-4222-8222-222222222222"
+    repo = Repository([{}, {"new-local": resolved}])
+    first = submit_review_authorized(prepared, repo, Embedder(), "pw", "pw")
+    second = submit_review_authorized(prepared, repo, Embedder(), "pw", "pw")
+    assert not first.success and second.success
+    assert repo.submissions[0].request_id == repo.submissions[1].request_id
+
+
+def test_auth_attempt_state_locks_after_five_failures_and_success_clears():
+    state = AuthAttemptState()
+    for now in range(4):
+        assert state.record_failure(float(now)) == 0
+    assert state.record_failure(4.0) == 60
+    assert state.retry_after(34.0) == 30
+    assert state.retry_after(64.0) == 0
+    state.record_success()
+    assert state.failure_count == 0 and state.retry_after(64.0) == 0
+
+
 def test_failure_preserves_board_result_and_request_id_for_unchanged_retry():
     prepared = prepared_review()
     before = prepared.board.names["Acme"].group_id
     request_id = prepared.pending_request_id
-    repo = Repository([RepositoryUnavailableError("database password leaked"), {}])
+    repo = Repository([RepositoryUnavailableError("database password leaked"), {"new-local": "22222222-2222-4222-8222-222222222222"}])
 
     failed = submit_review_authorized(prepared, repo, Embedder(), "pw", "pw")
+    assert prepared.board.names["Acme"].group_id == before
     retried = submit_review_authorized(prepared, repo, Embedder(), "pw", "pw")
 
     assert not failed.success and failed.result is None
     assert "password" not in failed.error
-    assert prepared.board.names["Acme"].group_id == before
     assert [payload.request_id for payload in repo.submissions] == [request_id, request_id]
     assert retried.success
 
@@ -137,7 +201,7 @@ def test_failed_resubmission_does_not_leave_prior_final_results():
 
 def test_changed_board_after_failure_gets_new_request_id():
     prepared = prepared_review()
-    repo = Repository([RepositoryUnavailableError("lost"), {}])
+    repo = Repository([RepositoryUnavailableError("lost"), {"new-local": "22222222-2222-4222-8222-222222222222"}])
     submit_review_authorized(prepared, repo, Embedder(), "pw", "pw")
     old_id = prepared.pending_request_id
 
@@ -211,6 +275,14 @@ def test_backup_requires_authorization_and_has_stable_safe_csv():
         "cleaned_name,canonical_title\r\na,Alpha\r\nz,Zulu\r\n"
     )
     assert repo.export_calls == 1
+
+
+def test_backup_neutralizes_spreadsheet_formulas_including_leading_whitespace():
+    repo = Repository(export=[ExportRow(" =SUM(A1:A2)", "+cmd")])
+    allowed = export_backup_csv(repo, "pw", "pw")
+    assert allowed.data.decode("utf-8") == (
+        "cleaned_name,canonical_title\r\n'+cmd,' =SUM(A1:A2)\r\n"
+    )
 
 
 def test_backup_repository_failure_is_sanitized():

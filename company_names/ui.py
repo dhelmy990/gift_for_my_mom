@@ -6,6 +6,7 @@ from collections import Counter
 import hashlib
 import html
 import json
+import time
 from uuid import uuid4
 
 import pandas as pd
@@ -15,6 +16,8 @@ from .review import validate_board
 from .review_session import clear_final_results
 from .service import (
     PreparedReview,
+    AuthAttemptState,
+    admin_password_digest,
     export_backup_csv,
     password_matches,
     submit_review_authorized,
@@ -344,17 +347,48 @@ def _add_from_search(board: ReviewBoard, widget_key: str) -> None:
     st.session_state[widget_key] = []
 
 
-def _unlock_admin(expected_password: str | None, password_key: str) -> None:
+def _bind_admin_session(session_state, expected_password: str | None) -> AuthAttemptState:
+    """Invalidate authorization when configuration changes and return its throttle."""
+    digest = admin_password_digest(expected_password)
+    if session_state.get("mapping_admin_password_digest") != digest:
+        session_state["mapping_admin_unlocked"] = False
+        session_state["mapping_admin_password_digest"] = digest
+        session_state["mapping_admin_attempts"] = AuthAttemptState()
+    attempts = session_state.get("mapping_admin_attempts")
+    if not isinstance(attempts, AuthAttemptState):
+        attempts = AuthAttemptState()
+        session_state["mapping_admin_attempts"] = attempts
+    return attempts
+
+
+def _unlock_admin(
+    expected_password: str | None, password_key: str, now: float | None = None
+) -> None:
     """Consume the candidate password and retain only the authorization decision."""
     import streamlit as st
 
     candidate = st.session_state.pop(password_key, None)
+    attempts = _bind_admin_session(st.session_state, expected_password)
+    current = time.monotonic() if now is None else now
+    retry_after = attempts.retry_after(current)
+    if retry_after:
+        st.session_state["mapping_admin_unlocked"] = False
+        st.session_state["mapping_admin_auth_error"] = (
+            f"Too many failed attempts. Retry in {retry_after} seconds."
+        )
+        return
     if password_matches(candidate, expected_password):
+        attempts.record_success()
         st.session_state["mapping_admin_unlocked"] = True
         st.session_state.pop("mapping_admin_auth_error", None)
     else:
         st.session_state["mapping_admin_unlocked"] = False
-        st.session_state["mapping_admin_auth_error"] = "Incorrect admin password."
+        retry_after = attempts.record_failure(current)
+        st.session_state["mapping_admin_auth_error"] = (
+            f"Too many failed attempts. Retry in {retry_after} seconds."
+            if retry_after
+            else "Incorrect admin password."
+        )
 
 
 def render_name_review(
@@ -367,6 +401,8 @@ def render_name_review(
     import streamlit as st
 
     board = prepared.board
+    auth_attempts = _bind_admin_session(st.session_state, admin_password)
+    auth_retry_after = auth_attempts.retry_after(time.monotonic())
     request_id = str(prepared.pending_request_id or id(prepared))
     init_key = review_widget_key(request_id, "initialized")
     if not st.session_state.get(init_key):
@@ -518,7 +554,10 @@ def render_name_review(
                 "Unlock permanent actions",
                 on_click=_unlock_admin,
                 args=(admin_password, password_key),
+                disabled=bool(auth_retry_after),
             )
+        if auth_retry_after:
+            st.warning(f"Too many failed attempts. Retry in {auth_retry_after} seconds.")
         auth_error = st.session_state.pop("mapping_admin_auth_error", None)
         if auth_error:
             st.error(auth_error)

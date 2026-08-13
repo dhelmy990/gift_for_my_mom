@@ -25,6 +25,7 @@ from company_names.review import build_submission
 
 
 EXPECTED_HEADER = ["input_text", "target_text", "remarks"]
+BACKUP_HEADER = ["cleaned_name", "canonical_title"]
 EMBEDDING_BATCH_SIZE = 64
 
 
@@ -41,20 +42,28 @@ def load_seed_rows(path: Path) -> list[tuple[str, str]]:
 
     with source:
         reader = csv.DictReader(source)
-        if reader.fieldnames != EXPECTED_HEADER:
+        if reader.fieldnames not in (EXPECTED_HEADER, BACKUP_HEADER):
             actual = ",".join(reader.fieldnames or []) or "(missing)"
             raise SeedValidationError(
-                "CSV header must be exactly input_text,target_text,remarks "
+                "CSV header must be exactly input_text,target_text,remarks or "
+                "cleaned_name,canonical_title "
                 f"(found {actual})"
             )
 
+        input_column, target_column = (
+            ("input_text", "target_text")
+            if reader.fieldnames == EXPECTED_HEADER
+            else ("cleaned_name", "canonical_title")
+        )
+
         unique: dict[str, tuple[str, str, str, int]] = {}
         for row_number, row in enumerate(reader, start=2):
-            raw_input = row["input_text"]
-            raw_target = row["target_text"]
+            raw_input = row[input_column]
+            raw_target = row[target_column]
             if raw_input is None or raw_target is None or None in row:
                 raise SeedValidationError(f"row {row_number} has malformed CSV fields")
-            target = raw_target.strip()
+            raw_input = _unescape_backup_cell(raw_input)
+            target = _unescape_backup_cell(raw_target).strip()
             if not raw_input.strip():
                 raise SeedValidationError(f"row {row_number} has a blank input_text")
             if not target:
@@ -87,6 +96,13 @@ def load_seed_rows(path: Path) -> list[tuple[str, str]]:
     if not rows:
         raise SeedValidationError("seed CSV contains no mappings")
     return sorted(rows, key=lambda item: (normalize_lookup_key(item[1]), normalize_lookup_key(item[0])))
+
+
+def _unescape_backup_cell(value: str) -> str:
+    """Reverse exactly the apostrophe prefix created by spreadsheet-safe export."""
+    if value.startswith("'") and value[1:].lstrip().startswith(("=", "+", "-", "@")):
+        return value[1:]
+    return value
 
 
 def _build_payload(rows: list[tuple[str, str]]) -> SubmissionPayload:
