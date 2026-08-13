@@ -47,7 +47,8 @@ def _review_styles() -> str:
             color: #fff !important;
         }
         .name-review-legend { border: 2px solid #000; padding: .5rem; }
-        .semantic-pill { color:#000 !important; border:2px solid #000; border-radius:999px;
+        [data-testid="stAppViewContainer"] .semantic-pill { color:#000 !important;
+                         border:2px solid #000; border-radius:999px;
                          display:inline-block; margin:.25rem; padding:.25rem .6rem; font-weight:700; }
         """ + SEMANTIC_PILL_CSS + """
         </style><h2>Review company names</h2>"""
