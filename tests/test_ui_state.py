@@ -10,6 +10,7 @@ from company_names.ui import (
     _bind_admin_session,
     _component_containers,
     _display_groups,
+    _sortable_groups,
     _restore_container_ids,
     _review_styles,
     _move_record,
@@ -172,20 +173,15 @@ def test_group_title_errors_reports_blank_unusable_and_both_duplicate_titles():
     state = board()
     state.groups["other"] = Group("other", "Other", False)
 
-    assert group_title_errors(state, {"existing": " ", "new-old": "Ltd.", "other": "Other"}) == {
+    assert group_title_errors(state, {"existing": " "}) == {
         "existing": "Enter a final company name.",
     }
 
-    errors = group_title_errors(
-        state,
-        {"existing": "Same Pte Ltd", "new-old": " same ", "other": "Other"},
-    )
-    assert errors == {}
-
-    assert group_title_errors(state, {"existing": "Other Ltd"}) == {}
-
     state.names["Beta"].selected = True
     state.names["Beta"].group_id = "new-old"
+    assert group_title_errors(
+        state, {"existing": "Alpha Group", "new-old": "Ltd."}
+    ) == {"new-old": "Enter a usable final company name."}
     errors = group_title_errors(state, {"existing": "Same Pte Ltd", "new-old": " same "})
     assert errors == {
         "existing": "Another group uses the same final company name.",
@@ -399,14 +395,15 @@ def test_sortable_board_does_not_render_empty_group_containers():
     ]
 
 
-def test_existing_group_remains_available_after_sole_member_moves_to_tray():
+def test_emptied_original_group_remains_displayed_but_not_sortable():
     state = board()
 
     move_to_tray(state, ["Alpha"])
 
-    assert [group.id for group in _display_groups(state)] == ["existing"]
+    assert [group.id for group in _display_groups(state, {"existing"})] == ["existing"]
+    assert _sortable_groups(state) == []
     containers = sortable_containers(state)
-    assert "Alpha Group" in [container["header"] for container in containers]
+    assert "Alpha Group" not in [container["header"] for container in containers]
 
     _move_record(state, "Alpha", "group:existing")
     assert state.names["Alpha"].group_id == "existing"
@@ -418,11 +415,26 @@ def test_empty_new_group_is_hidden_but_empty_existing_group_is_visible():
     empty_new = create_group(state)
     move_to_tray(state, ["Alpha"])
 
-    displayed_ids = [group.id for group in _display_groups(state)]
+    displayed_ids = [group.id for group in _display_groups(state, {"existing"})]
 
     assert "existing" in displayed_ids
     assert "new-old" not in displayed_ids
     assert empty_new.id not in displayed_ids
+
+
+def test_unrelated_existing_candidate_is_not_displayed_for_current_report():
+    state = board()
+    state.groups["unrelated"] = Group("unrelated", "Unrelated", True)
+
+    assert [group.id for group in _display_groups(state, {"existing"})] == ["existing"]
+
+
+def test_populated_group_is_sortable_even_when_not_an_original_exact_group():
+    state = board()
+    state.names["Beta"].selected = True
+    state.names["Beta"].group_id = "new-old"
+
+    assert [group.id for group in _sortable_groups(state)] == ["existing", "new-old"]
 
 
 def test_unknown_selection_and_inventory_moves_are_rejected():

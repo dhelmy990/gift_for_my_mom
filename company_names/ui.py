@@ -59,24 +59,30 @@ def _item(record) -> dict[str, str]:
     }
 
 
-def _display_groups(board: ReviewBoard) -> list[Group]:
+def _sortable_groups(board: ReviewBoard) -> list[Group]:
+    """Return only groups that currently contain a selected report name."""
     referenced = {
         record.group_id
         for record in board.names.values()
         if record.selected and not record.excluded and record.group_id is not None
     }
-    return [
-        group
-        for group in board.groups.values()
-        if group.existing or group.id in referenced
-    ]
+    return [group for group in board.groups.values() if group.id in referenced]
+
+
+def _display_groups(
+    board: ReviewBoard, original_group_ids: set[str] | None = None
+) -> list[Group]:
+    """Return populated or originally referenced groups relevant to this report."""
+    relevant_ids = {group.id for group in _sortable_groups(board)}
+    relevant_ids.update(original_group_ids or set())
+    return [group for group in board.groups.values() if group.id in relevant_ids]
 
 
 def sortable_containers(board: ReviewBoard) -> list[dict[str, object]]:
     """Project selected board records into stable sortable containers."""
     result: list[dict[str, object]] = [{"id": WORKING, "header": "Working tray", "items": []}]
     ordered_groups = sorted(
-        enumerate(_display_groups(board)),
+        enumerate(_sortable_groups(board)),
         key=lambda item: (not item[1].existing, item[0]),
     )
     for _, group in ordered_groups:
@@ -145,7 +151,7 @@ def apply_sort_result(board: ReviewBoard, containers: list[dict[str, object]]) -
     valid_destinations = {
         WORKING,
         EXCLUDED,
-        *(f"group:{group.id}" for group in _display_groups(board)),
+        *(f"group:{group.id}" for group in _sortable_groups(board)),
     }
     if not isinstance(containers, list):
         raise ValueError("Sortable result changed the board containers")
@@ -259,11 +265,11 @@ def group_title_errors(board: ReviewBoard, values: dict[str, str]) -> dict[str, 
     """Validate proposed group titles together so duplicate errors are symmetric."""
     errors: dict[str, str] = {}
     normalized: dict[str, str] = {}
-    populated_ids = {group.id for group in _display_groups(board)}
+    relevant_ids = set(values)
     effective_titles = {
         group_id: values.get(group_id, group.canonical_title)
         for group_id, group in board.groups.items()
-        if group_id in populated_ids
+        if group_id in relevant_ids
     }
     for group_id in values:
         if group_id not in board.groups:
@@ -650,10 +656,11 @@ def render_name_review(
         else:
             st.write("No names are currently separate.")
 
+    original_group_ids = set(prepared.original_mappings.values())
     ordered_groups = [
         group
         for _, group in sorted(
-            enumerate(_display_groups(board)),
+            enumerate(_display_groups(board, original_group_ids)),
             key=lambda item: (not item[1].existing, item[0]),
         )
     ]
@@ -778,11 +785,12 @@ def render_name_review(
         )
         if chosen:
             destinations = ["Separate companies", "Working tray"] + [
-                f"group:{group.id}" for group in _display_groups(board)
+                f"group:{group.id}"
+                for group in _display_groups(board, original_group_ids)
             ] + ["Left out of this report"]
             labels = {
                 f"group:{group.id}": f"Group: {group.canonical_title.strip() or 'Untitled group'}"
-                for group in _display_groups(board)
+                for group in _display_groups(board, original_group_ids)
             }
             destination = st.selectbox(
                 "Move to",
