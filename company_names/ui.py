@@ -13,7 +13,7 @@ import pandas as pd
 
 from .cleaning import normalize_lookup_key
 from .models import Group, ReviewBoard
-from .review import validate_board
+from .review import validate_submission
 from .review_session import clear_final_results
 from .service import (
     PreparedReview,
@@ -59,11 +59,20 @@ def _item(record) -> dict[str, str]:
     }
 
 
+def _display_groups(board: ReviewBoard) -> list[Group]:
+    referenced = {
+        record.group_id
+        for record in board.names.values()
+        if record.selected and not record.excluded and record.group_id is not None
+    }
+    return [group for group in board.groups.values() if group.id in referenced]
+
+
 def sortable_containers(board: ReviewBoard) -> list[dict[str, object]]:
     """Project selected board records into stable sortable containers."""
     result: list[dict[str, object]] = [{"id": WORKING, "header": "Working tray", "items": []}]
     ordered_groups = sorted(
-        enumerate(board.groups.values()),
+        enumerate(_display_groups(board)),
         key=lambda item: (not item[1].existing, item[0]),
     )
     for _, group in ordered_groups:
@@ -75,7 +84,7 @@ def sortable_containers(board: ReviewBoard) -> list[dict[str, object]]:
             }
         )
     result.append(
-        {"id": EXCLUDED, "header": "Excluded from this report", "items": []}
+        {"id": EXCLUDED, "header": "Left out of this report", "items": []}
     )
 
     by_id = {container["id"]: container for container in result}
@@ -129,7 +138,11 @@ def apply_sort_result(board: ReviewBoard, containers: list[dict[str, object]]) -
     selected = {name for name, record in board.names.items() if record.selected}
     lookup = {_item_id(name): name for name in selected}
     placements: list[tuple[str, str]] = []
-    valid_destinations = {WORKING, EXCLUDED, *(f"group:{group_id}" for group_id in board.groups)}
+    valid_destinations = {
+        WORKING,
+        EXCLUDED,
+        *(f"group:{group.id}" for group in _display_groups(board)),
+    }
     if not isinstance(containers, list):
         raise ValueError("Sortable result changed the board containers")
     destinations = [
@@ -195,6 +208,18 @@ def add_selected_names(board: ReviewBoard, selected: list[str]) -> None:
 def search_options(board: ReviewBoard) -> list[str]:
     """Return every report name; status formatting supplies its current location."""
     return sorted(board.names, key=lambda value: (value.casefold(), value))
+
+
+def separate_company_names(board: ReviewBoard) -> list[str]:
+    """Return automatic singleton names without creating per-name UI state."""
+    return sorted(
+        (
+            name
+            for name, record in board.names.items()
+            if not record.selected and record.group_id is None and not record.excluded
+        ),
+        key=lambda value: (value.casefold(), value),
+    )
 
 
 def name_status(board: ReviewBoard, cleaned_name: str) -> str:
@@ -427,14 +452,14 @@ def _semantic_pill_preview(board: ReviewBoard) -> str:
 
 
 def _move_record(board: ReviewBoard, name: str, destination: str) -> None:
-    if destination == "Inventory":
-        return_to_inventory(board, name)
+    if destination == "Separate companies":
+        return_to_separate(board, name)
         return
     record = board.names[name]
     record.selected = True
-    record.excluded = destination == "Excluded from this report"
+    record.excluded = destination == "Left out of this report"
     record.group_id = None
-    if destination not in {"Working tray", "Excluded from this report"}:
+    if destination not in {"Working tray", "Left out of this report"}:
         record.group_id = destination.removeprefix("group:")
 
 
@@ -444,6 +469,14 @@ def _add_from_search(board: ReviewBoard, widget_key: str) -> None:
 
     add_selected_names(board, list(st.session_state.get(widget_key, [])))
     st.session_state[widget_key] = []
+
+
+def _create_group_from_widget(board: ReviewBoard, widget_key: str) -> None:
+    """Create a named group in a widget callback and clear request-local input."""
+    import streamlit as st
+
+    create_combined_group(board, str(st.session_state.get(widget_key, "")))
+    st.session_state[widget_key] = ""
 
 
 def _bind_admin_session(session_state, expected_password: str | None) -> AuthAttemptState:
@@ -515,49 +548,85 @@ def render_name_review(
         st.warning(warning)
 
     st.markdown(_review_styles(), unsafe_allow_html=True)
+    st.markdown("**1. Find names  →  2. Combine duplicates  →  3. Review and save**")
+    st.write(
+        "Most company names should stay separate. Find only the duplicates you want "
+        "to combine, then move them into the Working tray."
+    )
     st.markdown(
         '<div class="name-review-legend" aria-label="Name match legend">'
         "🟦 Exact database match &nbsp; 🟨 Suggested match &nbsp; ⬜ Unmatched; "
-        "the exclusion area has a dashed boundary.</div>",
+        "every name also shows its current location.</div>",
         unsafe_allow_html=True,
     )
+
+    st.subheader("1. Find names")
     search_key = review_widget_key(request_id, "search")
     st.multiselect(
-        "Find names from this report",
+        "Search every company name in this report",
         options=search_options(board),
         format_func=lambda name: name_status(board, name),
-        placeholder="Search cleaned company names",
+        placeholder="Type a company name",
         key=search_key,
         on_change=_add_from_search,
         args=(board, search_key),
     )
 
+    separate_names = separate_company_names(board)
+    st.markdown(f"### Separate companies ({len(separate_names)})")
+    st.write("Names left here will be saved as separate companies automatically.")
+    with st.expander(f"View separate companies ({len(separate_names)})"):
+        if separate_names:
+            escaped_names = "".join(
+                f'<span class="semantic-pill source-{board.names[name].source}">'
+                f'{html.escape(name, quote=True)}</span>'
+                for name in separate_names
+            )
+            st.markdown(escaped_names, unsafe_allow_html=True)
+        else:
+            st.write("No names are currently separate.")
+
     ordered_groups = [
         group
         for _, group in sorted(
-            enumerate(board.groups.values()),
+            enumerate(_display_groups(board)),
             key=lambda item: (not item[1].existing, item[0]),
         )
     ]
-    title_values = {
-        group.id: st.text_input(
-            "Canonical title",
+    st.subheader("2. Combine duplicates")
+    st.markdown("### Combined groups")
+    title_values = {}
+    for group in ordered_groups:
+        title_values[group.id] = st.text_input(
+            f"Final company name for {group.canonical_title.strip() or 'untitled group'}",
             value=group.canonical_title,
             key=review_widget_key(request_id, "group_title", group.id),
         )
-        for group in ordered_groups
-    }
     apply_group_titles(board, title_values)
-    if st.button("Create group", key=review_widget_key(request_id, "create_group")):
-        create_group(board)
-        st.rerun()
+
+    title_key = review_widget_key(request_id, "new_group_title")
+    new_title = st.text_input(
+        "Final company name",
+        placeholder="Type the name this combined group should use",
+        key=title_key,
+    )
+    creation_error = group_creation_error(board, new_title)
+    if creation_error:
+        st.caption(creation_error)
+    st.button(
+        "Create combined group",
+        key=review_widget_key(request_id, "create_combined_group"),
+        disabled=creation_error is not None,
+        on_click=_create_group_from_widget,
+        args=(board, title_key),
+    )
 
     try:
         projected_containers = sortable_containers(board)
     except ValueError as exc:
         st.error(f"Review state is invalid: {exc}")
         st.button(
-            "Submit final review",
+            "Save mappings and show totals",
             key=review_widget_key(request_id, "invalid_board_submit"),
             disabled=True,
         )
@@ -568,7 +637,7 @@ def render_name_review(
     except ValueError as exc:
         st.error(f"Review state is invalid: {exc}")
         st.button(
-            "Submit final review",
+            "Save mappings and show totals",
             key=review_widget_key(request_id, "invalid_source_submit"),
             disabled=True,
         )
@@ -597,37 +666,45 @@ def render_name_review(
         ):
             st.rerun()
     except ImportError:
-        st.warning("Drag-and-drop is unavailable; use the accessible move controls below.")
+        st.warning("Drag-and-drop is unavailable; use Move a company name below.")
     except ValueError:
         st.warning("The board returned an incomplete update. No names were moved; please try again.")
 
-    with st.expander("Accessible name movement controls"):
+    with st.expander("Move a company name", expanded=True):
         chosen = st.selectbox(
-            "Name",
+            "Company name",
             options=[""] + search_options(board),
             key=review_widget_key(request_id, "move_name"),
         )
         if chosen:
-            destinations = ["Inventory", "Working tray"] + [
-                f"group:{group.id}" for group in board.groups.values()
-            ] + ["Excluded from this report"]
+            destinations = ["Separate companies", "Working tray"] + [
+                f"group:{group.id}" for group in _display_groups(board)
+            ] + ["Left out of this report"]
             labels = {
-                f"group:{group.id}": group.canonical_title.strip() or "Untitled group"
-                for group in board.groups.values()
+                f"group:{group.id}": f"Group: {group.canonical_title.strip() or 'Untitled group'}"
+                for group in _display_groups(board)
             }
             destination = st.selectbox(
-                f"Move {chosen} to",
+                "Destination",
                 destinations,
                 format_func=lambda value: labels.get(value, value),
                 key=review_widget_key(request_id, "move_destination"),
             )
-            if st.button("Move name", key=review_widget_key(request_id, "move")):
+            if st.button("Move company name", key=review_widget_key(request_id, "move")):
                 _move_record(board, chosen, destination)
                 st.rerun()
 
-    errors = validate_board(board)
+    errors = validate_submission(board)
     if errors:
         st.error("Review is not ready:\n\n" + "\n\n".join(f"- {error}" for error in errors))
+
+    st.subheader("3. Review and save")
+    summary = review_summary(board)
+    st.write(
+        f"{summary['separate']} separate companies · "
+        f"{summary['combined_groups']} combined groups · "
+        f"{summary['excluded']} left out"
+    )
 
     unlocked = bool(st.session_state.get("mapping_admin_unlocked"))
     if not admin_password:
@@ -640,7 +717,7 @@ def render_name_review(
         with st.form(review_widget_key(request_id, "admin_unlock")):
             st.text_input("Admin password", type="password", key=password_key)
             st.form_submit_button(
-                "Unlock permanent actions",
+                "Confirm admin password",
                 on_click=_unlock_admin,
                 args=(admin_password, password_key),
                 disabled=bool(auth_retry_after),
@@ -653,24 +730,26 @@ def render_name_review(
 
     unlocked = bool(st.session_state.get("mapping_admin_unlocked"))
     if unlocked and admin_password:
-        if st.button("Prepare mappings backup", key=review_widget_key(request_id, "backup")):
-            backup = export_backup_csv(repository, admin_password, admin_password)
-            if backup.error:
-                st.error(backup.error)
-            elif backup.data is not None:
-                st.download_button(
-                    "Download mappings backup",
-                    data=backup.data,
-                    file_name="company_name_mappings.csv",
-                    mime="text/csv; charset=utf-8",
-                    key=review_widget_key(request_id, "backup_download"),
-                )
+        with st.expander("Backup and recovery"):
+            st.write("Download a CSV copy of all permanent company-name mappings.")
+            if st.button("Prepare backup file", key=review_widget_key(request_id, "backup")):
+                backup = export_backup_csv(repository, admin_password, admin_password)
+                if backup.error:
+                    st.error(backup.error)
+                elif backup.data is not None:
+                    st.download_button(
+                        "Download mappings backup",
+                        data=backup.data,
+                        file_name="company_name_mappings.csv",
+                        mime="text/csv; charset=utf-8",
+                        key=review_widget_key(request_id, "backup_download"),
+                    )
 
     clicked = st.button(
-        "Submit final review",
+        "Save mappings and show totals",
         key=review_widget_key(request_id, "submit"),
         disabled=bool(errors) or not unlocked or not bool(admin_password),
-        help="Resolve every included name and unlock permanent actions first.",
+        help="Resolve names in the Working tray and confirm the admin password first.",
     )
     if clicked:
         # A retry is a new display attempt even when its database request ID is

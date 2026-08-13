@@ -10,10 +10,12 @@ from company_names.ui import (
     _component_containers,
     _restore_container_ids,
     _review_styles,
+    _move_record,
     _semantic_pill_preview,
     name_status,
     review_widget_key,
     search_options,
+    separate_company_names,
     add_selected_names,
     apply_group_titles,
     apply_sort_result,
@@ -221,7 +223,7 @@ def test_sortable_moves_names_between_tray_group_and_exclusion():
     gamma = by_header["Working tray"]["items"].pop()
     by_header["Alpha Group"]["items"].append(gamma)
     alpha = by_header["Alpha Group"]["items"].pop(0)
-    by_header["Excluded from this report"]["items"].append(alpha)
+    by_header["Left out of this report"]["items"].append(alpha)
 
     apply_sort_result(state, containers)
 
@@ -306,7 +308,7 @@ def test_return_to_inventory_is_explicit_and_clears_all_placement_state():
     assert record.excluded is False
 
 
-def test_create_group_uses_stable_new_prefix_and_preserves_empty_groups():
+def test_sortable_board_does_not_render_empty_group_containers():
     state = board()
 
     first = create_group(state)
@@ -320,10 +322,7 @@ def test_create_group_uses_stable_new_prefix_and_preserves_empty_groups():
     assert headers == [
         "Working tray",
         "Alpha Group",
-        "New Group",
-        "Untitled group",
-        "Untitled group",
-        "Excluded from this report",
+        "Left out of this report",
     ]
 
 
@@ -340,6 +339,8 @@ def test_component_container_ids_remain_unique_when_titles_match():
     state = board()
     state.groups["existing"].canonical_title = "Same"
     state.groups["new-old"].canonical_title = "Same"
+    state.names["Beta"].selected = True
+    state.names["Beta"].group_id = "new-old"
 
     rendered = _component_containers(sortable_containers(state))
 
@@ -435,6 +436,36 @@ def test_every_report_name_is_searchable_with_current_status():
     assert name_status(state, "alpha") == "alpha — Separate company"
     assert name_status(state, "Beta") == "Beta — Separate company"
     assert name_status(state, "Gamma") == "Gamma — Left out of this report"
+
+
+def test_accessible_move_path_reaches_every_plain_language_destination():
+    state = board()
+
+    _move_record(state, "Beta", "Working tray")
+    assert name_status(state, "Beta") == "Beta — Working tray"
+    _move_record(state, "Beta", "group:existing")
+    assert name_status(state, "Beta") == "Beta — Group: Alpha Group"
+    _move_record(state, "Beta", "Left out of this report")
+    assert name_status(state, "Beta") == "Beta — Left out of this report"
+    _move_record(state, "Beta", "Separate companies")
+    assert name_status(state, "Beta") == "Beta — Separate company"
+
+
+def test_separate_company_names_returns_196_names_sorted_without_widgets():
+    names = [f"Company {number:03d}" for number in range(196, 0, -1)]
+    state = ReviewBoard(
+        groups={},
+        names={name: NameRecord(name, None, "unknown", False) for name in names},
+    )
+
+    assert separate_company_names(state) == sorted(names)
+
+
+def test_separate_company_names_only_contains_automatic_singletons():
+    state = board()
+    state.names["Gamma"].excluded = True
+
+    assert separate_company_names(state) == ["alpha", "Beta"]
 
 
 def test_searching_already_placed_names_moves_them_to_tray_without_duplicates():
