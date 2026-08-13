@@ -88,9 +88,11 @@ def validate_board(board: ReviewBoard) -> list[str]:
 
 
 def build_submission(
-    board: ReviewBoard, original_mappings: dict[str, str]
+    board: ReviewBoard,
+    original_mappings: dict[str, str],
+    request_id: str | None = None,
 ) -> SubmissionPayload:
-    """Build a persistence payload, rejecting invalid state and direct remaps."""
+    """Build a payload, optionally preserving the request ID for a retry."""
     errors = validate_board(board)
     for cleaned_name in sorted(board.names):
         record = board.names[cleaned_name]
@@ -133,7 +135,9 @@ def build_submission(
         for cleaned_name, record in sorted(board.names.items())
         if cleaned_name in original_mappings and not record.selected
     ]
-    return SubmissionPayload(groups, mappings, unmap_names)
+    if request_id is None:
+        return SubmissionPayload(groups, mappings, unmap_names)
+    return SubmissionPayload(groups, mappings, unmap_names, request_id)
 
 
 def aggregate_by_group(rows: pd.DataFrame, board: ReviewBoard) -> pd.DataFrame:

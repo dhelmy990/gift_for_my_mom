@@ -213,6 +213,23 @@ def test_submission_payload_keeps_one_request_id_for_retries() -> None:
     assert payload.request_id == "11111111-1111-4111-8111-111111111111"
 
 
+def test_build_submission_reuses_an_explicit_request_id() -> None:
+    review = board(
+        groups=[Group("new", "New Group", False)],
+        names=[NameRecord("Alias", "new", "suggested", selected=True)],
+    )
+    first = build_submission(review, {})
+    retry = build_submission(review, {}, request_id=first.request_id)
+
+    assert retry == first
+
+
+@pytest.mark.parametrize("request_id", ["", "not-a-uuid", "11111111-1111-4111-8111-11111111111z"])
+def test_submission_payload_rejects_invalid_request_id(request_id: str) -> None:
+    with pytest.raises(ValueError, match="request_id must be a UUID"):
+        SubmissionPayload([], [], [], request_id)
+
+
 def test_build_submission_only_unmaps_original_names_deliberately_returned_to_inventory() -> None:
     review = board(
         groups=[Group("g", "Group", True)],

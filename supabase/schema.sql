@@ -10,7 +10,7 @@ create table if not exists public.submission_ledger (
 
 alter table public.submission_ledger enable row level security;
 revoke all on table public.submission_ledger from public, anon, authenticated;
-grant select, insert on table public.submission_ledger to service_role;
+grant select, insert, delete on table public.submission_ledger to service_role;
 
 create table if not exists public.name_groups (
   id uuid primary key default gen_random_uuid(),
@@ -354,10 +354,32 @@ begin
 end;
 $$;
 
+create or replace function public.purge_name_submission_ledger(
+  older_than interval default interval '90 days'
+)
+returns bigint language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+declare
+  deleted_count bigint;
+begin
+  if older_than is null or older_than < interval '0 seconds' then
+    raise exception using errcode = '22023', message = 'retention interval must be non-negative';
+  end if;
+  delete from public.submission_ledger
+  where created_at < now() - older_than;
+  get diagnostics deleted_count = row_count;
+  return deleted_count;
+end;
+$$;
+
 revoke all on function public.set_updated_at() from public, anon, authenticated;
 revoke all on function public.valid_review_embedding(jsonb) from public, anon, authenticated;
 revoke all on function public.review_lookup_key(text) from public, anon, authenticated;
 revoke execute on function public.submit_name_review(jsonb) from public, anon, authenticated;
+revoke execute on function public.purge_name_submission_ledger(interval) from public, anon, authenticated;
 grant execute on function public.valid_review_embedding(jsonb) to service_role;
 grant execute on function public.review_lookup_key(text) to service_role;
 grant execute on function public.submit_name_review(jsonb) to service_role;
+grant execute on function public.purge_name_submission_ledger(interval) to service_role;

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from typing import Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 
 @dataclass
@@ -33,3 +33,10 @@ class SubmissionPayload:
     mappings: list[dict[str, object]]
     unmap_names: list[str]
     request_id: str = field(default_factory=lambda: str(uuid4()))
+
+    def __post_init__(self) -> None:
+        try:
+            canonical_request_id = str(UUID(self.request_id))
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("request_id must be a UUID") from None
+        object.__setattr__(self, "request_id", canonical_request_id)

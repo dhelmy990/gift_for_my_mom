@@ -177,7 +177,7 @@ The application sends one reviewed change set to a PostgreSQL function. In one t
 4. Deletes mappings for previously validated members deliberately removed from their original group.
 5. Updates group and member embeddings.
 
-Any error rolls back the full submission. Excluded names are omitted from the change set and never persisted as exclusions. The in-session board remains available so the user can correct or retry.
+Any error rolls back the full submission. Excluded names are omitted from the change set and never persisted as exclusions. The in-session board remains available so the user can correct or retry. The Task 8 UI must retain the pending submission request ID in session state and reuse it when rebuilding a payload after a lost response; it creates a new ID only after a definitively resolved submission or a changed mutation payload.
 
 After a successful transaction, aggregation combines all included member rows and sums `RNS` and revenue under the canonical title, then sorts the final report by revenue as the existing collation does.
 

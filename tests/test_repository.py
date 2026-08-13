@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from company_names.models import SubmissionPayload
+from company_names.models import Group, NameRecord, ReviewBoard
+from company_names.review import build_submission
 from company_names.repository import (
     RepositoryConfigurationError,
     RepositoryUnavailableError,
@@ -131,6 +133,24 @@ def test_submit_uses_one_rpc_call_with_exact_payload():
     assert result == {"temp-1": "00000000-0000-0000-0000-000000000001"}
 
 
+def test_lost_response_retry_rebuild_serializes_the_same_request_id():
+    board = ReviewBoard(
+        {"temp-1": Group("temp-1", "Group", False)},
+        {"Alias": NameRecord("Alias", "temp-1", "suggested", selected=True)},
+    )
+    first = build_submission(board, {})
+    failed_client = FakeClient(error=TimeoutError("response lost after commit"))
+    with pytest.raises(RepositoryUnavailableError):
+        SupabaseMappingRepository(failed_client).submit(first)
+
+    retry = build_submission(board, {}, request_id=first.request_id)
+    retry_client = FakeClient()
+    SupabaseMappingRepository(retry_client).submit(retry)
+
+    assert failed_client.rpc_calls[0][1]["payload"] == retry_client.rpc_calls[0][1]["payload"]
+    assert retry_client.rpc_calls[0][1]["payload"]["request_id"] == first.request_id
+
+
 def test_export_rows_are_stably_sorted():
     repo = repository({"name_mappings": [
         {"cleaned_name": "Zulu", "name_groups": {"canonical_title": "Alpha"}},
@@ -207,6 +227,11 @@ def test_schema_contains_security_vector_and_atomic_review_contract():
     assert "alter table public.submission_ledger enable row level security" in sql
     assert "revoke all on table public.submission_ledger from public, anon, authenticated" in sql
     assert "pg_advisory_xact_lock(hashtextextended" in sql
+    assert "function public.purge_name_submission_ledger" in sql
+    assert "interval '90 days'" in sql
+    assert "revoke execute on function public.purge_name_submission_ledger(interval) from public, anon, authenticated" in sql
+    assert "grant execute on function public.purge_name_submission_ledger(interval) to service_role" in sql
+    assert "grant select, insert, delete on table public.submission_ledger to service_role" in sql
 
 
 def test_review_rpc_stages_trimmed_identity_fields_before_checks_and_writes():
