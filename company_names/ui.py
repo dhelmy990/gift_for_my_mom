@@ -36,13 +36,21 @@ SEMANTIC_PILL_CSS = """
 
 def _review_styles() -> str:
     return """<style>
-        .name-review, .name-review * { color: #000 !important; }
-        .name-review { background: #fff; border: 3px solid #000; padding: 1rem; }
+        [data-testid="stAppViewContainer"],
+        [data-testid="stAppViewContainer"] p,
+        [data-testid="stAppViewContainer"] label,
+        [data-testid="stAppViewContainer"] span,
+        [data-testid="stAppViewContainer"] button,
+        [data-testid="stAppViewContainer"] input,
+        [data-testid="stAppViewContainer"] textarea,
+        [data-testid="stAppViewContainer"] [data-baseweb="select"] * {
+            color: #000 !important;
+        }
         .name-review-legend { border: 2px solid #000; padding: .5rem; }
         .semantic-pill { color:#000 !important; border:2px solid #000; border-radius:999px;
                          display:inline-block; margin:.25rem; padding:.25rem .6rem; font-weight:700; }
         """ + SEMANTIC_PILL_CSS + """
-        </style><div class="name-review"><h2>Review company names</h2></div>"""
+        </style><h2>Review company names</h2>"""
 
 
 def _item_id(cleaned_name: str) -> str:
@@ -894,45 +902,32 @@ def render_name_review(
         )
         return None
 
-    try:
-        preview = _semantic_pill_preview(board)
-    except ValueError as exc:
-        st.error(f"Review state is invalid: {exc}")
-        st.button(
-            "Save mappings and show totals",
-            key=review_widget_key(request_id, "invalid_source_submit"),
-            disabled=True,
-        )
-        return None
-    st.markdown(
-        f'<div aria-label="Selected name color preview">{preview}</div>',
-        unsafe_allow_html=True,
-    )
-
     containers = projected_containers
-    try:
-        from streamlit_sortables import sort_items
+    with st.expander("Optional: drag names between groups", expanded=False):
+        st.write("Drag names only if that is easier than using the Move controls below.")
+        try:
+            from streamlit_sortables import sort_items
 
-        result = sort_items(
-            _component_containers(containers),
-            multi_containers=True,
-            key=review_widget_key(request_id, "board", _board_revision(board)),
-            custom_style="""
-              .sortable-component { color:#000 !important; border:2px solid #000 !important; }
-              .sortable-container:last-child { border:3px dashed #000 !important; }
-              .sortable-item { color:#000 !important; background:#e9ecef !important; border:2px solid #555 !important; }
-            """,
-        )
-        if apply_sort_result_changed(
-            board, _restore_container_ids(result, containers)
-        ):
-            st.rerun()
-    except ImportError:
-        st.warning("Drag-and-drop is unavailable; use Move a company name below.")
-    except ValueError:
-        st.warning("The board returned an incomplete update. No names were moved; please try again.")
+            result = sort_items(
+                _component_containers(containers),
+                multi_containers=True,
+                key=review_widget_key(request_id, "board", _board_revision(board)),
+                custom_style="""
+                  .sortable-component { color:#000 !important; border:2px solid #000 !important; }
+                  .sortable-container:last-child { border:3px dashed #000 !important; }
+                  .sortable-item { color:#000 !important; background:#e9ecef !important; border:2px solid #555 !important; }
+                """,
+            )
+            if apply_sort_result_changed(
+                board, _restore_container_ids(result, containers)
+            ):
+                st.rerun()
+        except ImportError:
+            st.warning("Drag-and-drop is unavailable; use Move a company name below.")
+        except ValueError:
+            st.warning("The board returned an incomplete update. No names were moved; please try again.")
 
-    with st.expander("Move a company name", expanded=True):
+    with st.expander("Move a company name", expanded=False):
         chosen = st.selectbox(
             "Name",
             options=[""] + search_options(board),
@@ -997,7 +992,9 @@ def render_name_review(
     unlocked = bool(st.session_state.get("mapping_admin_unlocked"))
     if unlocked and admin_password:
         with st.expander("Backup and recovery"):
-            st.write("Download a CSV copy of all permanent company-name mappings.")
+            st.write(
+                "This reads all permanent mappings from Supabase and prepares a downloadable CSV copy for safekeeping."
+            )
             if st.button("Prepare backup file", key=review_widget_key(request_id, "backup")):
                 backup = export_backup_csv(repository, admin_password, admin_password)
                 if backup.error:

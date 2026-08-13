@@ -132,7 +132,11 @@ def test_accept_suggestion_never_overrides_an_exact_mapping():
 def test_review_styles_render_css_braces_without_python_interpolation():
     styles = _review_styles()
 
-    assert ".name-review, .name-review * { color: #000 !important; }" in styles
+    assert '[data-testid="stAppViewContainer"]' in styles
+    assert '[data-testid="stAppViewContainer"] input' in styles
+    assert '[data-testid="stAppViewContainer"] button' in styles
+    assert "color: #000 !important" in styles
+    assert '<div class="name-review">' not in styles
     assert SEMANTIC_PILL_CSS.strip() in styles
 
 
@@ -480,8 +484,20 @@ def test_save_and_backup_controls_use_task_oriented_copy_in_display_order():
     assert "Enter admin password to save" in source
     assert '"Confirm admin password"' not in source
     assert save_position < backup_position
-    assert "Download a CSV copy of all permanent company-name mappings." in source
+    assert (
+        "This reads all permanent mappings from Supabase and prepares a "
+        "downloadable CSV copy for safekeeping."
+    ) in source
     assert 'st.button("Prepare backup file"' in source
+
+
+def test_optional_movement_controls_are_collapsed_and_semantic_names_are_not_triplicated():
+    source = Path("company_names/ui.py").read_text()
+
+    assert 'st.expander("Optional: drag names between groups", expanded=False)' in source
+    assert 'st.expander("Move a company name", expanded=False)' in source
+    assert "preview = _semantic_pill_preview(board)" not in source
+    assert 'aria-label="Selected name color preview"' not in source
 
 
 def test_sortable_uses_opaque_unique_ids_for_case_differing_labels():
