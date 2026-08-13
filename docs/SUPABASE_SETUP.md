@@ -106,16 +106,25 @@ After the feature is deployed:
 
 1. Open the Streamlit app.
 2. Confirm it shows the database as connected.
-3. Process a small report.
-4. Create a clearly labeled test group and add one test name.
-5. Enter the shared admin password and submit.
-6. Reboot the Streamlit app from Community Cloud.
-7. Process the same test name again.
-8. Confirm it returns in the saved canonical group.
-9. In the review screen, confirm you can move a name between groups, rename a
-   canonical group, exclude an inventory row, and review grouped totals before
-   downloading them.
-10. Confirm controls, focus indicators, and status messages remain readable in the
+3. Process a small report containing at least two aliases that should represent the
+   same company.
+4. Confirm untouched names appear under **Separate companies** and do not require
+   you to create a group for each one.
+5. Search for the two aliases and move both into the **Working tray**.
+6. Type a final company name that does not appear in the report, then create the
+   combined group.
+7. Move one alias from that group back to the Working tray, return it to Separate
+   companies, and then add it to the Working tray and combined group again. This
+   confirms every move is reversible before saving.
+8. Enter the shared admin password and select **Save mappings and show totals**.
+9. Confirm the result uses the final company name you typed and combines the room
+   nights and revenue for both aliases.
+10. Reboot the Streamlit app from Community Cloud and process the same report again.
+11. Confirm both aliases return in the saved combined group with the saved final
+    company name.
+12. Expand **Backup and recovery**, authorize the action with the shared admin
+    password, and confirm you can download the two-column mappings CSV.
+13. Confirm controls, focus indicators, and status messages remain readable in the
     browser's normal and high-contrast/forced-colors display modes.
 
 That reboot check proves the mapping came from Supabase rather than temporary Streamlit storage.
