@@ -144,6 +144,10 @@ def build_submission(
         raise ValueError("\n".join(errors))
 
     materialized = materialize_singletons(board)
+    errors = validate_board(materialized)
+    if errors:
+        raise ValueError("\n".join(errors))
+
     populated_group_ids = {
         record.group_id
         for record in materialized.names.values()

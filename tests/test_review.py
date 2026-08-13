@@ -379,6 +379,24 @@ def test_build_submission_materializes_unseen_separate_names_deterministically()
     assert review.groups == {}
 
 
+def test_build_submission_rejects_duplicate_title_created_by_materialization() -> None:
+    review = board(
+        groups=[Group("existing", "Alpha Travel", True)],
+        names=[
+            NameRecord("Existing Alias", "existing", "exact", selected=True),
+            NameRecord("Alpha Travel", None, "unknown"),
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Duplicate populated group title: Alpha Travel / Alpha Travel"
+        ),
+    ):
+        build_submission(review, {"Existing Alias": "existing"})
+
+
 def test_build_submission_keeps_unchanged_exact_mapping_without_unmapping() -> None:
     review = board(
         groups=[Group("g", "Group", True)],
