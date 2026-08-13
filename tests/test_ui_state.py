@@ -9,6 +9,7 @@ from company_names.ui import (
     _bind_admin_session,
     _component_containers,
     _restore_container_ids,
+    _review_styles,
     _semantic_pill_preview,
     name_status,
     review_widget_key,
@@ -22,6 +23,13 @@ from company_names.ui import (
     return_to_inventory,
     sortable_containers,
 )
+
+
+def test_review_styles_render_css_braces_without_python_interpolation():
+    styles = _review_styles()
+
+    assert ".name-review, .name-review * { color: #000 !important; }" in styles
+    assert SEMANTIC_PILL_CSS.strip() in styles
 
 
 def test_admin_session_unlock_is_bound_to_configured_password_digest():

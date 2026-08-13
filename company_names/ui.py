@@ -33,6 +33,17 @@ SEMANTIC_PILL_CSS = """
 """
 
 
+def _review_styles() -> str:
+    return """<style>
+        .name-review, .name-review * { color: #000 !important; }
+        .name-review { background: #fff; border: 3px solid #000; padding: 1rem; }
+        .name-review-legend { border: 2px solid #000; padding: .5rem; }
+        .semantic-pill { color:#000 !important; border:2px solid #000; border-radius:999px;
+                         display:inline-block; margin:.25rem; padding:.25rem .6rem; font-weight:700; }
+        """ + SEMANTIC_PILL_CSS + """
+        </style><div class="name-review"><h2>Review company names</h2></div>"""
+
+
 def _item_id(cleaned_name: str) -> str:
     digest = hashlib.sha256(cleaned_name.encode("utf-8")).hexdigest()
     return f"name-{digest}"
@@ -415,17 +426,7 @@ def render_name_review(
     for warning in prepared.warnings:
         st.warning(warning)
 
-    st.markdown(
-        f"""<style>
-        .name-review, .name-review * { color: #000 !important; }
-        .name-review { background: #fff; border: 3px solid #000; padding: 1rem; }
-        .name-review-legend { border: 2px solid #000; padding: .5rem; }
-        .semantic-pill { color:#000 !important; border:2px solid #000; border-radius:999px;
-                         display:inline-block; margin:.25rem; padding:.25rem .6rem; font-weight:700; }
-        {SEMANTIC_PILL_CSS}
-        </style><div class="name-review"><h2>Review company names</h2></div>""",
-        unsafe_allow_html=True,
-    )
+    st.markdown(_review_styles(), unsafe_allow_html=True)
     st.markdown(
         '<div class="name-review-legend" aria-label="Name match legend">'
         "🟦 Exact database match &nbsp; 🟨 Suggested match &nbsp; ⬜ Unmatched; "
