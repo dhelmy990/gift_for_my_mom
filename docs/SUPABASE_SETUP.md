@@ -103,6 +103,28 @@ After implementation, an authorized user can download the mapping backup from th
 
 Backups are especially sensible before bulk regrouping or renaming canonical groups.
 
+## Optional: import reviewed mappings from CSV
+
+After creating the database tables, you can validate a reviewed CSV locally without
+connecting to Supabase or loading the embedding model:
+
+```bash
+python3 scripts/seed_name_mappings.py company_name_normalization_finetuning.csv
+```
+
+Review the reported mapping and group counts. To submit the same validated file,
+provide the server credentials as environment variables and opt in with `--apply`:
+
+```bash
+export SUPABASE_URL="https://YOUR-PROJECT.supabase.co"
+export SUPABASE_SERVICE_KEY="YOUR-SERVER-SIDE-SECRET-KEY"
+python3 scripts/seed_name_mappings.py company_name_normalization_finetuning.csv --apply
+```
+
+The importer does not need `ADMIN_PASSWORD`. Replace the placeholders only in your
+local shell; never put real credentials in this document, the CSV, source code, or
+Git commits.
+
 ## Troubleshooting
 
 ### The app says Supabase is not configured
