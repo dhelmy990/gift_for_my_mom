@@ -351,22 +351,44 @@ def test_submission_payload_rejects_invalid_request_id(request_id: str) -> None:
         SubmissionPayload([], [], [], request_id)
 
 
-def test_build_submission_only_unmaps_original_names_deliberately_returned_to_inventory() -> None:
+def test_build_submission_materializes_unseen_separate_names_deterministically() -> None:
     review = board(
-        groups=[Group("g", "Group", True)],
+        groups=[],
         names=[
-            NameRecord("Inventory", None, "exact"),
-            NameRecord("Excluded", None, "exact", selected=True, excluded=True),
-            NameRecord("Included", "g", "exact", selected=True),
+            NameRecord("Beta", None, "unknown"),
+            NameRecord("Alpha", None, "unknown"),
         ],
     )
 
-    payload = build_submission(
-        review, {"Inventory": "g", "Excluded": "g", "Included": "g"}
+    payload = build_submission(review, {})
+
+    alpha_id = singleton_group_id("Alpha")
+    beta_id = singleton_group_id("Beta")
+    assert payload.groups == sorted(
+        [
+            {"id": alpha_id, "canonical_title": "Alpha", "existing": False},
+            {"id": beta_id, "canonical_title": "Beta", "existing": False},
+        ],
+        key=lambda group: group["id"],
+    )
+    assert payload.mappings == [
+        {"cleaned_name": "Alpha", "group_id": alpha_id},
+        {"cleaned_name": "Beta", "group_id": beta_id},
+    ]
+    assert payload.unmap_names == []
+    assert review.groups == {}
+
+
+def test_build_submission_keeps_unchanged_exact_mapping_without_unmapping() -> None:
+    review = board(
+        groups=[Group("g", "Group", True)],
+        names=[NameRecord("Miki", "g", "exact", selected=True)],
     )
 
-    assert payload.mappings == [{"cleaned_name": "Included", "group_id": "g"}]
-    assert payload.unmap_names == ["Inventory"]
+    payload = build_submission(review, {"Miki": "g"})
+
+    assert payload.mappings == [{"cleaned_name": "Miki", "group_id": "g"}]
+    assert payload.unmap_names == []
 
 
 def test_build_submission_preserves_persisted_identity_for_an_exact_alias() -> None:
@@ -385,15 +407,27 @@ def test_build_submission_preserves_persisted_identity_for_an_exact_alias() -> N
     assert payload.mappings == [{"cleaned_name": "Miki-Travel", "group_id": "g"}]
 
 
-def test_build_submission_unmaps_the_persisted_identity_of_an_exact_alias() -> None:
+def test_build_submission_remaps_exact_alias_to_singleton_atomically() -> None:
     review = board(
-        groups=[Group("g", "Miki", True)],
-        names=[NameRecord("Miki Travel", None, "exact", persisted_name="Miki-Travel")],
+        groups=[Group("g", "Stored", True)],
+        names=[NameRecord("Stored Alias", None, "exact", persisted_name="Stored-Alias")],
     )
 
-    payload = build_submission(review, {"Miki Travel": "g"})
+    payload = build_submission(review, {"Stored Alias": "g"})
 
-    assert payload.unmap_names == ["Miki-Travel"]
+    singleton_id = singleton_group_id("Stored Alias")
+    assert payload.groups == [
+        {"id": "g", "canonical_title": "Stored", "existing": True},
+        {
+            "id": singleton_id,
+            "canonical_title": "Stored Alias",
+            "existing": False,
+        },
+    ]
+    assert payload.mappings == [
+        {"cleaned_name": "Stored-Alias", "group_id": singleton_id}
+    ]
+    assert payload.unmap_names == ["Stored-Alias"]
 
 
 def test_aggregate_uses_report_identity_when_exact_alias_has_persisted_identity() -> None:
@@ -417,16 +451,66 @@ def test_aggregate_uses_report_identity_when_exact_alias_has_persisted_identity(
     ]
 
 
-def test_build_submission_rejects_direct_remapping() -> None:
+def test_build_submission_remaps_directly_between_groups_atomically() -> None:
     review = board(
         groups=[Group("old", "Old", True), Group("new", "New", True)],
-        names=[NameRecord("Alias", "new", "exact", selected=True)],
+        names=[
+            NameRecord(
+                "Stored Alias",
+                "new",
+                "exact",
+                selected=True,
+                persisted_name="Stored-Alias",
+            )
+        ],
     )
 
-    with pytest.raises(
-        ValueError, match="Alias is already mapped to old and cannot be remapped to new"
-    ):
-        build_submission(review, {"Alias": "old"})
+    payload = build_submission(review, {"Stored Alias": "old"})
+
+    assert payload.mappings == [
+        {"cleaned_name": "Stored-Alias", "group_id": "new"}
+    ]
+    assert payload.unmap_names == ["Stored-Alias"]
+
+
+def test_build_submission_exclusion_is_report_only_for_an_exact_alias() -> None:
+    review = board(
+        groups=[Group("old", "Old", True)],
+        names=[
+            NameRecord(
+                "Stored Alias",
+                None,
+                "exact",
+                selected=True,
+                excluded=True,
+                persisted_name="Stored-Alias",
+            )
+        ],
+    )
+
+    payload = build_submission(review, {"Stored Alias": "old"})
+
+    assert payload.mappings == []
+    assert payload.unmap_names == []
+
+
+def test_build_submission_retry_is_byte_equivalent_after_singleton_remap() -> None:
+    review = board(
+        groups=[Group("old", "Old", True)],
+        names=[
+            NameRecord(
+                "Stored Alias", None, "exact", persisted_name="Stored-Alias"
+            ),
+            NameRecord("Beta", None, "unknown"),
+        ],
+    )
+
+    first = build_submission(review, {"Stored Alias": "old"})
+    retry = build_submission(
+        review, {"Stored Alias": "old"}, request_id=first.request_id
+    )
+
+    assert retry == first
 
 
 def test_build_submission_rejects_an_invalid_board() -> None:

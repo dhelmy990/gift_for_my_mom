@@ -138,28 +138,15 @@ def build_submission(
     original_mappings: dict[str, str],
     request_id: str | None = None,
 ) -> SubmissionPayload:
-    """Build a payload, optionally preserving the request ID for a retry."""
-    errors = validate_board(board)
-    for cleaned_name in sorted(board.names):
-        record = board.names[cleaned_name]
-        original_group_id = original_mappings.get(cleaned_name)
-        if (
-            original_group_id is not None
-            and record.selected
-            and not record.excluded
-            and record.group_id is not None
-            and record.group_id != original_group_id
-        ):
-            errors.append(
-                f"{cleaned_name} is already mapped to {original_group_id} "
-                f"and cannot be remapped to {record.group_id}"
-            )
+    """Build atomic mapping mutations from a materialized copy of the board."""
+    errors = validate_submission(board)
     if errors:
         raise ValueError("\n".join(errors))
 
+    materialized = materialize_singletons(board)
     populated_group_ids = {
         record.group_id
-        for record in board.names.values()
+        for record in materialized.names.values()
         if record.selected and not record.excluded and record.group_id is not None
     }
     groups = [
@@ -168,11 +155,12 @@ def build_submission(
             "canonical_title": group.canonical_title,
             "existing": group.existing,
         }
-        for group in sorted(board.groups.values(), key=lambda group: group.id)
+        for group in sorted(materialized.groups.values(), key=lambda group: group.id)
         if group.existing or group.id in populated_group_ids
     ]
     mappings_by_name: dict[str, dict[str, object]] = {}
-    for cleaned_name, record in sorted(board.names.items()):
+    unmap_names: set[str] = set()
+    for cleaned_name, record in sorted(materialized.names.items()):
         if record.selected and not record.excluded and record.group_id is not None:
             storage_name = record.persisted_name or cleaned_name
             mapping = {"cleaned_name": storage_name, "group_id": record.group_id}
@@ -180,15 +168,13 @@ def build_submission(
             if prior is not None and prior != mapping:
                 raise ValueError(f"Persisted name {storage_name} has conflicting groups")
             mappings_by_name[storage_name] = mapping
+            original_group_id = original_mappings.get(cleaned_name)
+            if original_group_id is not None and original_group_id != record.group_id:
+                unmap_names.add(storage_name)
     mappings = list(mappings_by_name.values())
-    unmap_names = sorted({
-        record.persisted_name or cleaned_name
-        for cleaned_name, record in sorted(board.names.items())
-        if cleaned_name in original_mappings and not record.selected
-    })
     if request_id is None:
-        return SubmissionPayload(groups, mappings, unmap_names)
-    return SubmissionPayload(groups, mappings, unmap_names, request_id)
+        return SubmissionPayload(groups, mappings, sorted(unmap_names))
+    return SubmissionPayload(groups, mappings, sorted(unmap_names), request_id)
 
 
 def aggregate_by_group(rows: pd.DataFrame, board: ReviewBoard) -> pd.DataFrame:
