@@ -77,11 +77,23 @@ def _acronym(name: str) -> str:
 def _cosine(left: list[float] | None, right: list[float] | None) -> float | None:
     if left is None or right is None or len(left) != len(right) or not left:
         return None
-    left_norm = math.sqrt(sum(value * value for value in left))
-    right_norm = math.sqrt(sum(value * value for value in right))
+    if not all(math.isfinite(value) for value in (*left, *right)):
+        return None
+    left_norm = math.hypot(*left)
+    right_norm = math.hypot(*right)
     if left_norm == 0.0 or right_norm == 0.0:
         return None
-    return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
+    return math.fsum(
+        (a / left_norm) * (b / right_norm) for a, b in zip(left, right)
+    )
+
+
+def _exact_priority(query_key: str, candidate: Candidate) -> int:
+    if query_key == normalize_lookup_key(candidate.canonical_title):
+        return 2
+    if query_key == normalize_lookup_key(candidate.member_name):
+        return 1
+    return 0
 
 
 def _text_scores(query_key: str, candidate_key: str) -> tuple[float, float]:
@@ -145,12 +157,24 @@ def rank_candidates(
     if limit <= 0:
         return []
 
-    best_by_group: dict[str, tuple[Suggestion, int]] = {}
+    query_key = normalize_lookup_key(query)
+    best_by_group: dict[str, tuple[Suggestion, int, int]] = {}
     for index, candidate in enumerate(candidates):
         suggestion = _score_candidate(query, candidate, query_vector)
+        exact_priority = _exact_priority(query_key, candidate)
         current = best_by_group.get(candidate.group_id)
-        if current is None or suggestion.score > current[0].score:
-            best_by_group[candidate.group_id] = (suggestion, index)
+        if current is None or (suggestion.score, exact_priority) > (
+            current[0].score,
+            current[2],
+        ):
+            best_by_group[candidate.group_id] = (
+                suggestion,
+                index,
+                exact_priority,
+            )
 
-    ranked = sorted(best_by_group.values(), key=lambda item: (-item[0].score, item[1]))
-    return [suggestion for suggestion, _ in ranked[:limit]]
+    ranked = sorted(
+        best_by_group.values(),
+        key=lambda item: (-item[0].score, -item[2], item[1]),
+    )
+    return [suggestion for suggestion, _, _ in ranked[:limit]]

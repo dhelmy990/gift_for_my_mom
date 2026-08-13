@@ -1,3 +1,4 @@
+import math
 import sys
 
 import pytest
@@ -47,6 +48,21 @@ def test_exact_canonical_match_is_recognized_after_normalization() -> None:
     assert result[0].score == 1.0
 
 
+def test_canonical_exact_ranks_before_member_exact() -> None:
+    result = rank_candidates(
+        "MTL",
+        [
+            candidate("g1", "Miki Travel", "MTL"),
+            candidate("g2", "MTL", "Other Alias"),
+        ],
+        None,
+    )
+
+    assert [suggestion.group_id for suggestion in result] == ["g2", "g1"]
+    assert [suggestion.score for suggestion in result] == [1.0, 1.0]
+    assert [suggestion.reason for suggestion in result] == ["exact", "exact"]
+
+
 def test_acronym_uses_meaningful_tokens_before_legal_suffix_cleanup() -> None:
     result = rank_candidates(
         "MTL",
@@ -91,6 +107,35 @@ def test_zero_query_vector_has_no_vector_signal() -> None:
     )[0]
 
     assert result.vector_score == 0.0
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("bad_side", ["query", "candidate"])
+def test_nonfinite_vector_values_have_no_vector_signal(
+    bad_value: float, bad_side: str
+) -> None:
+    query_vector = [bad_value, 0.0] if bad_side == "query" else [1.0, 0.0]
+    candidate_vector = [bad_value, 0.0] if bad_side == "candidate" else [1.0, 0.0]
+
+    candidates = [candidate("invalid", "beta", vector=candidate_vector)]
+    if bad_side == "candidate":
+        candidates.append(candidate("valid", "beta", vector=[1.0, 0.0]))
+    results = rank_candidates("alpha", candidates, query_vector)
+    result = next(item for item in results if item.group_id == "invalid")
+
+    assert result.vector_score == 0.0
+    assert all(
+        math.isfinite(value)
+        for value in (
+            result.score,
+            result.vector_score,
+            result.fuzzy_score,
+            result.token_score,
+            result.acronym_score,
+        )
+    )
+    if bad_side == "candidate":
+        assert results[0].group_id == "valid"
 
 
 def test_missing_vector_renormalizes_text_weights() -> None:
