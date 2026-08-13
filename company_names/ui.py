@@ -192,6 +192,12 @@ def review_widget_key(request_id: str, *parts: str) -> str:
     return ":".join(("name_review", str(request_id), *(str(part) for part in parts)))
 
 
+def apply_group_titles(board: ReviewBoard, values: dict[str, str]) -> None:
+    """Apply canonical-title widget values before projecting the review board."""
+    for group_id, title in values.items():
+        board.groups[group_id].canonical_title = title
+
+
 def return_to_inventory(board: ReviewBoard, cleaned_name: str) -> None:
     """Explicitly remove one name from all review-board containers."""
     if cleaned_name not in board.names:
@@ -378,6 +384,26 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         args=(board, search_key),
     )
 
+    ordered_groups = [
+        group
+        for _, group in sorted(
+            enumerate(board.groups.values()),
+            key=lambda item: (not item[1].existing, item[0]),
+        )
+    ]
+    title_values = {
+        group.id: st.text_input(
+            "Canonical title",
+            value=group.canonical_title,
+            key=review_widget_key(request_id, "group_title", group.id),
+        )
+        for group in ordered_groups
+    }
+    apply_group_titles(board, title_values)
+    if st.button("Create group", key=review_widget_key(request_id, "create_group")):
+        create_group(board)
+        st.rerun()
+
     try:
         projected_containers = sortable_containers(board)
     except ValueError as exc:
@@ -404,22 +430,7 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         unsafe_allow_html=True,
     )
 
-    ordered_groups = [
-        board.groups[container["id"].removeprefix("group:")]
-        for container in projected_containers
-        if str(container["id"]).startswith("group:")
-    ]
-    for group in ordered_groups:
-        group.canonical_title = st.text_input(
-            "Canonical title",
-            value=group.canonical_title,
-            key=review_widget_key(request_id, "group_title", group.id),
-        )
-    if st.button("Create group", key=review_widget_key(request_id, "create_group")):
-        create_group(board)
-        st.rerun()
-
-    containers = sortable_containers(board)
+    containers = projected_containers
     try:
         from streamlit_sortables import sort_items
 

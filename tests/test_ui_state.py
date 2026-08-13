@@ -13,6 +13,7 @@ from company_names.ui import (
     review_widget_key,
     search_options,
     add_selected_names,
+    apply_group_titles,
     apply_sort_result,
     apply_sort_result_changed,
     board_location_revision,
@@ -341,3 +342,13 @@ def test_semantic_pill_css_colors_each_source_class():
     assert ".source-suggested" in SEMANTIC_PILL_CSS
     assert "#FFD166" in SEMANTIC_PILL_CSS
     assert ".source-unknown" in SEMANTIC_PILL_CSS
+
+
+def test_applying_group_titles_before_preview_uses_the_new_container_title():
+    state = board()
+
+    apply_group_titles(state, {"existing": "Renamed Group"})
+    preview = _semantic_pill_preview(state)
+
+    assert "Renamed Group" in preview
+    assert "Alpha Group" not in preview
