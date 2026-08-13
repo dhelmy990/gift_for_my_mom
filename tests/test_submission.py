@@ -278,11 +278,18 @@ def test_backup_requires_authorization_and_has_stable_safe_csv():
 
 
 def test_backup_neutralizes_spreadsheet_formulas_including_leading_whitespace():
+    import csv
+    import io
+
+    from company_names.csv_safety import CSV_SAFE_PREFIX, csv_unsafe_cell
+
     repo = Repository(export=[ExportRow(" =SUM(A1:A2)", "+cmd")])
     allowed = export_backup_csv(repo, "pw", "pw")
-    assert allowed.data.decode("utf-8") == (
-        "cleaned_name,canonical_title\r\n'+cmd,' =SUM(A1:A2)\r\n"
-    )
+    rows = list(csv.reader(io.StringIO(allowed.data.decode("utf-8"))))
+    assert rows[0] == ["cleaned_name", "canonical_title"]
+    assert len(rows[1]) == 2
+    assert all(cell.startswith(CSV_SAFE_PREFIX) for cell in rows[1])
+    assert [csv_unsafe_cell(cell) for cell in rows[1]] == ["+cmd", " =SUM(A1:A2)"]
 
 
 def test_backup_repository_failure_is_sanitized():

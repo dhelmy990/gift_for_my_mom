@@ -19,14 +19,18 @@ def test_load_seed_rows_cleans_inputs_and_trims_targets(tmp_path: Path) -> None:
     assert load_seed_rows(path) == [("Acme", "Acme Group")]
 
 
-def test_load_seed_rows_reverses_only_backup_formula_escaping(tmp_path: Path) -> None:
+def test_load_seed_rows_reverses_only_reserved_backup_escaping(tmp_path: Path) -> None:
+    from company_names.csv_safety import csv_safe_cell
+
     path = csv_file(
         tmp_path,
-        "cleaned_name,canonical_title\n' =SUM(A1:A2),'+Formula Group\n'O'Brien,'@Real Group\n",
+        "cleaned_name,canonical_title\n"
+        f"{csv_safe_cell(' =SUM(A1:A2)')},{csv_safe_cell('+Formula Group')}\n"
+        "'=Already Safe,'@Real Group\n",
     )
     assert load_seed_rows(path) == [
         ("=SUM(A1:A2)", "+Formula Group"),
-        ("'O'Brien", "@Real Group"),
+        ("'=Already Safe", "'@Real Group"),
     ]
 
 

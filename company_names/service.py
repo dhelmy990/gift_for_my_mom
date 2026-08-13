@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pandas as pd
 
 from .cleaning import clean_company_name
+from .csv_safety import csv_safe_cell
 from .matching import EMBEDDING_DIMENSION, EmbeddingProvider, Suggestion, rank_candidates
 from .models import Group, NameRecord, ReviewBoard, SubmissionPayload
 from .repository import MappingRepository, RepositoryUnavailableError
@@ -477,11 +478,3 @@ def export_backup_csv(
         for row in rows
     )
     return BackupOutcome(data=output.getvalue().encode("utf-8"))
-
-
-def csv_safe_cell(value: str) -> str:
-    """Neutralize values spreadsheet programs could interpret as formulas."""
-    stripped = value.lstrip()
-    if stripped.startswith(("=", "+", "-", "@")):
-        return "'" + value
-    return value

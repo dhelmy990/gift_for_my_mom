@@ -108,9 +108,12 @@ That reboot check proves the mapping came from Supabase rather than temporary St
 After implementation, an authorized user can download the mapping backup from the app. Save occasional copies somewhere outside both Streamlit and Supabase, such as private cloud storage.
 
 The backup has exactly two columns (`cleaned_name,canonical_title`) and is
-spreadsheet-safe. Cells that could be interpreted as formulas are prefixed with one
-apostrophe. That apostrophe is export escaping; the seed importer reverses exactly
-this pattern when a backup is restored, while preserving ordinary apostrophes.
+spreadsheet-safe. Cells that could be interpreted as formulas are encoded using a
+reserved, apostrophe-led marker and a URL-safe encoding of the original UTF-8 text.
+The seed importer decodes only valid values carrying that exact marker. Ordinary
+apostrophes—including apostrophe-prefixed formulas—remain unchanged, and original
+text beginning with the reserved marker is itself encoded so restoration is
+unambiguous.
 
 Backups are especially sensible before bulk regrouping or renaming canonical groups.
 

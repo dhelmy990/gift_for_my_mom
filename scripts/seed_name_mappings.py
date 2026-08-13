@@ -20,6 +20,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from company_names.cleaning import clean_company_name, normalize_lookup_key
+from company_names.csv_safety import csv_unsafe_cell
 from company_names.models import Group, NameRecord, ReviewBoard, SubmissionPayload
 from company_names.review import build_submission
 
@@ -62,8 +63,8 @@ def load_seed_rows(path: Path) -> list[tuple[str, str]]:
             raw_target = row[target_column]
             if raw_input is None or raw_target is None or None in row:
                 raise SeedValidationError(f"row {row_number} has malformed CSV fields")
-            raw_input = _unescape_backup_cell(raw_input)
-            target = _unescape_backup_cell(raw_target).strip()
+            raw_input = csv_unsafe_cell(raw_input)
+            target = csv_unsafe_cell(raw_target).strip()
             if not raw_input.strip():
                 raise SeedValidationError(f"row {row_number} has a blank input_text")
             if not target:
@@ -96,13 +97,6 @@ def load_seed_rows(path: Path) -> list[tuple[str, str]]:
     if not rows:
         raise SeedValidationError("seed CSV contains no mappings")
     return sorted(rows, key=lambda item: (normalize_lookup_key(item[1]), normalize_lookup_key(item[0])))
-
-
-def _unescape_backup_cell(value: str) -> str:
-    """Reverse exactly the apostrophe prefix created by spreadsheet-safe export."""
-    if value.startswith("'") and value[1:].lstrip().startswith(("=", "+", "-", "@")):
-        return value[1:]
-    return value
 
 
 def _build_payload(rows: list[tuple[str, str]]) -> SubmissionPayload:
