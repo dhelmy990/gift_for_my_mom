@@ -8,10 +8,44 @@ from itertools import takewhile
 
 DESIRED_ORDER = ["HB", "VLV", "VBN", "HMB", "HMR"]
 
-def extract_all_tables(exclude : list, pdf_path="./CAROLINE FEBRUARY/JANUARY 2026/VLV.PDF"):
-    df = pd.DataFrame(columns=['Sum of RNS', 'Sum of R REVENUE'])
-    df.index.name = 'TRAVEL AGENT'
+def parse_agent_text_blocks(text_blocks: list[str], exclude: list[str]) -> pd.DataFrame:
+    """Parse rectangle text without collapsing repeated travel-agent rows."""
+    records = []
+    excluded = [item.casefold() for item in exclude]
+    for text in text_blocks:
+        if not isinstance(text, str):
+            continue
+        lines = text.split('\n')
+        if len(lines) < 3:
+            continue
+        try:
+            selected = [lines[index] for index in (0, -3, -1)]
+            name = " ".join(takewhile(
+                lambda word: not any(character.isdigit() for character in word),
+                selected[0].split(),
+            ))
+            if not name:
+                name = selected[0].split()[0]
+            if any(item in name.casefold() for item in excluded):
+                continue
+            numeric = []
+            for value in selected[1:]:
+                token = value.split()[-1]
+                numeric.append(float(re.sub(r'[^\d.]', '', token)))
+        except (IndexError, TypeError, ValueError):
+            continue
+        records.append({
+            "TRAVEL AGENT": name,
+            "Sum of RNS": numeric[0],
+            "Sum of R REVENUE": numeric[1],
+        })
+    return pd.DataFrame(
+        records,
+        columns=["TRAVEL AGENT", "Sum of RNS", "Sum of R REVENUE"],
+    )
 
+def extract_all_tables(exclude : list, pdf_path="./CAROLINE FEBRUARY/JANUARY 2026/VLV.PDF"):
+    text_blocks = []
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             for rect in page.rects:
@@ -19,19 +53,9 @@ def extract_all_tables(exclude : list, pdf_path="./CAROLINE FEBRUARY/JANUARY 202
                         rect['x1'], rect['bottom'])
                 cropped = page.crop(bbox)
                 text = cropped.extract_text()
-                lines = text.split('\n')
-                lines = [lines[i] for i in (0, -3, -1)] #the first is name, second is RNR, third is total revenue
-                _ = " ".join(takewhile(lambda w: not any(c.isdigit() for c in w), lines[0].split())) #get everything until first number
-                if _ == "":
-                    _ = lines[0].split()[0]
-                if any(item in _.lower() for item in exclude):
-                    continue
-                else:
-                    lines[0] = _
-                lines[1], lines[2] = lines[1].split()[-1], lines[2].split()[-1]
-                df.loc[lines[0]] = [float(re.sub(r'[^\d.]', '', x)) for x in lines[1:]]
-        return df
-    return None
+                if text:
+                    text_blocks.append(text)
+    return parse_agent_text_blocks(text_blocks, exclude)
 
 def extract_last_table_as_df(pdf_path="./CAROLINE FEBRUARY/1.PDF", k=None, name : str = "default"):
     """
