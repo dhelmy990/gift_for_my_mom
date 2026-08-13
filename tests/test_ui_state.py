@@ -14,6 +14,8 @@ from company_names.ui import (
     search_options,
     add_selected_names,
     apply_sort_result,
+    apply_sort_result_changed,
+    board_location_revision,
     create_group,
     return_to_inventory,
     sortable_containers,
@@ -85,6 +87,37 @@ def test_sortable_moves_names_between_tray_group_and_exclusion():
     assert state.names["Gamma"].excluded is False
     assert state.names["Alpha"].group_id is None
     assert state.names["Alpha"].excluded is True
+
+
+def test_location_revision_is_immutable_sorted_and_tracks_only_placement():
+    state = board()
+
+    revision = board_location_revision(state)
+    state.groups["existing"].canonical_title = "Renamed"
+
+    assert board_location_revision(state) == revision
+    assert revision == tuple(sorted(revision))
+    state.names["Gamma"].excluded = True
+    assert board_location_revision(state) != revision
+
+
+def test_apply_sort_result_changed_reports_a_new_placement():
+    state = board()
+    containers = sortable_containers(state)
+    gamma = containers[0]["items"].pop()
+    containers[1]["items"].append(gamma)
+
+    assert apply_sort_result_changed(state, containers) is True
+    assert state.names["Gamma"].group_id == "existing"
+
+
+def test_apply_sort_result_changed_ignores_reordering_with_same_placements():
+    state = board()
+    add_selected_names(state, ["Beta"])
+    containers = sortable_containers(state)
+    containers[0]["items"].reverse()
+
+    assert apply_sort_result_changed(state, containers) is False
 
 
 def test_missing_sortable_item_is_rejected_without_state_corruption():

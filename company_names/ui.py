@@ -78,6 +78,21 @@ def sortable_containers(board: ReviewBoard) -> list[dict[str, object]]:
     return result
 
 
+def board_location_revision(
+    board: ReviewBoard,
+) -> tuple[tuple[str, bool, str | None, bool], ...]:
+    """Return an immutable, order-independent snapshot of name placements."""
+    return tuple(
+        (
+            name,
+            record.selected,
+            record.group_id,
+            record.excluded,
+        )
+        for name, record in sorted(board.names.items())
+    )
+
+
 def _decode_item(value: object, lookup: dict[str, str]) -> str | None:
     if isinstance(value, dict):
         item_id = value.get("id")
@@ -126,6 +141,15 @@ def apply_sort_result(board: ReviewBoard, containers: list[dict[str, object]]) -
         record.selected = True
         record.excluded = destination == EXCLUDED
         record.group_id = destination.removeprefix("group:") if destination.startswith("group:") else None
+
+
+def apply_sort_result_changed(
+    board: ReviewBoard, containers: list[dict[str, object]]
+) -> bool:
+    """Apply sortable output and report whether any name changed location."""
+    before = board_location_revision(board)
+    apply_sort_result(board, containers)
+    return board_location_revision(board) != before
 
 
 def add_selected_names(board: ReviewBoard, selected: list[str]) -> None:
@@ -409,7 +433,10 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
               .sortable-item { color:#000 !important; background:#e9ecef !important; border:2px solid #555 !important; }
             """,
         )
-        apply_sort_result(board, _restore_container_ids(result, containers))
+        if apply_sort_result_changed(
+            board, _restore_container_ids(result, containers)
+        ):
+            st.rerun()
     except ImportError:
         st.warning("Drag-and-drop is unavailable; use the accessible move controls below.")
     except ValueError:
