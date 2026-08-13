@@ -55,6 +55,7 @@ def test_name_review_uses_plain_language_singleton_first_copy():
     assert 'review_widget_key(request_id, "new_group_title")' not in source
     assert '"Return to separate"' in source
     assert '"Move to tray"' in source
+    assert 'f"Move tray names to {matching_group.canonical_title}"' in source
     assert source.count(
         "columns[0].markdown(semantic_pill(board.names[name]), unsafe_allow_html=True)"
     ) == 2

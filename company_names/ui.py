@@ -327,21 +327,17 @@ def group_creation_error(board: ReviewBoard, title: str) -> str | None:
     if len(_tray_names(board)) < 2:
         return "Add at least two names to the working tray."
     try:
-        normalized_title = normalize_lookup_key(trimmed_title)
+        normalize_lookup_key(trimmed_title)
     except ValueError:
         return "Enter a usable final company name."
 
-    matches = sorted(
-        (
-            group
-            for group in board.groups.values()
-            if _normalized_group_title(group.canonical_title) == normalized_title
-        ),
-        key=lambda group: group.id,
-    )
-    if matches:
+    try:
+        matching_group = matching_group_for_title(board, trimmed_title)
+    except ValueError:
+        return "More than one existing group uses that final company name."
+    if matching_group is not None:
         return (
-            f"A group named ‘{matches[0].canonical_title}’ already exists. "
+            f"A group named ‘{matching_group.canonical_title}’ already exists. "
             "Move these names into that group instead."
         )
     return None
@@ -352,6 +348,33 @@ def _normalized_group_title(title: str) -> str | None:
         return normalize_lookup_key(title)
     except ValueError:
         return None
+
+
+def matching_group_for_title(board: ReviewBoard, title: str) -> Group | None:
+    """Return the unique group matching a proposed title, including hidden candidates."""
+    normalized_title = normalize_lookup_key(title.strip())
+    matches = sorted(
+        (
+            group
+            for group in board.groups.values()
+            if _normalized_group_title(group.canonical_title) == normalized_title
+        ),
+        key=lambda group: group.id,
+    )
+    if len(matches) > 1:
+        raise ValueError("Multiple groups use the same final company name")
+    return matches[0] if matches else None
+
+
+def move_tray_to_group(board: ReviewBoard, group_id: str) -> None:
+    """Move every current working-tray name into one validated group."""
+    if group_id not in board.groups:
+        raise KeyError(group_id)
+    for name in _tray_names(board):
+        record = board.names[name]
+        record.selected = True
+        record.group_id = group_id
+        record.excluded = False
 
 
 def create_combined_group(board: ReviewBoard, title: str) -> Group:
@@ -549,6 +572,15 @@ def _move_to_tray_callback(board: ReviewBoard, cleaned_name: str) -> None:
     move_to_tray(board, [cleaned_name])
 
 
+def _move_tray_to_group_callback(
+    board: ReviewBoard, group_id: str, title_key: str
+) -> None:
+    import streamlit as st
+
+    move_tray_to_group(board, group_id)
+    st.session_state[title_key] = ""
+
+
 def _bind_admin_session(session_state, expected_password: str | None) -> AuthAttemptState:
     """Invalidate authorization when configuration changes and return its throttle."""
     digest = admin_password_digest(expected_password)
@@ -720,6 +752,21 @@ def render_name_review(
     creation_error = group_creation_error(board, new_title)
     if creation_error:
         st.caption(creation_error)
+    matching_group = None
+    if new_title and creation_error:
+        try:
+            matching_group = matching_group_for_title(board, new_title)
+        except ValueError:
+            st.error("More than one existing group uses that name. Correct the group titles first.")
+    if matching_group is not None and len(_tray_names(board)) >= 2:
+        st.button(
+            f"Move tray names to {matching_group.canonical_title}",
+            key=review_widget_key(
+                request_id, "move_tray_to_group", matching_group.id
+            ),
+            on_click=_move_tray_to_group_callback,
+            args=(board, matching_group.id, title_key),
+        )
     st.button(
         "Create combined group",
         key=review_widget_key(request_id, "create_combined_group"),

@@ -30,7 +30,9 @@ from company_names.ui import (
     create_combined_group,
     group_creation_error,
     group_title_errors,
+    matching_group_for_title,
     move_to_tray,
+    move_tray_to_group,
     review_summary,
     review_errors,
     semantic_pill,
@@ -158,15 +160,53 @@ def test_group_creation_error_requires_two_tray_names_before_normalizing_title()
     assert group_creation_error(state, "Ltd.") == "Add at least two names to the working tray."
 
 
-def test_group_creation_error_detects_normalized_title_conflict_deterministically():
+def test_group_creation_error_reports_ambiguous_normalized_title_conflict():
     state = board()
     state.groups["aaa"] = Group("aaa", "ALPHA_GROUP PTE LTD", False)
     move_to_tray(state, ["Beta", "Gamma"])
 
     assert group_creation_error(state, " alpha group ltd. ") == (
-        "A group named ‘ALPHA_GROUP PTE LTD’ already exists. "
+        "More than one existing group uses that final company name."
+    )
+
+
+def test_hidden_matching_group_can_receive_every_tray_name_directly():
+    state = board()
+    state.groups["hidden"] = Group("hidden", "Hidden Destination", True)
+    move_to_tray(state, ["Beta", "Gamma"])
+
+    match = matching_group_for_title(state, " hidden destination pte ltd ")
+
+    assert match is state.groups["hidden"]
+    assert group_creation_error(state, "hidden destination") == (
+        "A group named ‘Hidden Destination’ already exists. "
         "Move these names into that group instead."
     )
+    assert "hidden" not in {
+        group.id for group in _display_groups(state, {"existing"})
+    }
+    move_tray_to_group(state, match.id)
+    assert all(state.names[name].group_id == "hidden" for name in ["Beta", "Gamma"])
+    assert review_summary(state)["tray"] == 0
+
+
+def test_matching_group_for_title_rejects_ambiguous_normalized_matches():
+    state = board()
+    state.groups["duplicate"] = Group("duplicate", "Alpha Group Ltd", True)
+
+    with pytest.raises(ValueError, match="Multiple groups"):
+        matching_group_for_title(state, "alpha group")
+
+
+def test_move_tray_to_group_validates_destination_before_mutating():
+    state = board()
+    move_to_tray(state, ["Beta", "Gamma"])
+    before = deepcopy(state)
+
+    with pytest.raises(KeyError, match="missing"):
+        move_tray_to_group(state, "missing")
+
+    assert state == before
 
 
 def test_group_title_errors_reports_blank_unusable_and_both_duplicate_titles():
