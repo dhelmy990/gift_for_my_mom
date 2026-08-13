@@ -146,17 +146,20 @@ python3 scripts/seed_name_mappings.py /path/to/reviewed-mappings.csv
 ```
 
 Review the reported mapping and group counts. To submit the same validated file,
-create an ignored `.env.seed` file with a text editor. Put one `SUPABASE_URL=...` and
-one `SUPABASE_SERVICE_KEY=...` line in it, never commit it, and then load it and opt in
-with `--apply`:
+first create an empty, permission-restricted `.env.seed`, then edit it to add one
+`SUPABASE_URL=...` and one `SUPABASE_SERVICE_KEY=...` line. Never commit this ignored
+file. Load it and opt in with `--apply`:
 
 ```bash
-chmod 600 .env.seed
+install -m 600 /dev/null .env.seed
+# Edit .env.seed now; do not enter credentials before permissions are restricted.
 set -a
 source .env.seed
 set +a
 python3 scripts/seed_name_mappings.py /path/to/reviewed-mappings.csv --apply
 unset SUPABASE_URL SUPABASE_SERVICE_KEY
+# Only after a successful import; this local deletion cannot be undone.
+rm .env.seed
 ```
 
 This avoids putting the service key in shell history. Any downloaded two-column backup
@@ -175,8 +178,9 @@ generated in bounded batches of 64 while the database update remains one atomic
 submission.
 
 The importer does not need `ADMIN_PASSWORD`. Never put real credentials in this
-document, the CSV, source code, shell command arguments, or Git commits. Delete the
-local `.env.seed` when it is no longer needed.
+document, the CSV, source code, shell command arguments, or Git commits. Keep the
+service key in a password manager. Remove the local `.env.seed` only after a successful
+import and only when you accept that local deletion is irreversible.
 
 ## Troubleshooting
 

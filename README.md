@@ -61,18 +61,21 @@ To validate a reviewed CSV without connecting to Supabase or loading the embeddi
 .venv/bin/python scripts/seed_name_mappings.py /path/to/reviewed-mappings.csv
 ```
 
-The importer accepts either an exact three-column reviewed file (`input_text,target_text,remarks`) or an exact two-column backup exported by the app (`cleaned_name,canonical_title`). After reviewing the counts, put the server credentials in an ignored local file named `.env.seed` using a text editor, with one `SUPABASE_URL=...` and one `SUPABASE_SERVICE_KEY=...` line. Never commit this file. Load it without putting the service key in shell history, explicitly apply the CSV, then clear the variables:
+The importer accepts either an exact three-column reviewed file (`input_text,target_text,remarks`) or an exact two-column backup exported by the app (`cleaned_name,canonical_title`). After reviewing the counts, create an empty, permission-restricted `.env.seed`, then use a text editor to add one `SUPABASE_URL=...` and one `SUPABASE_SERVICE_KEY=...` line. Never commit this ignored file. Load it without putting the service key in shell history, explicitly apply the CSV, then clear the variables:
 
 ```bash
-chmod 600 .env.seed
+install -m 600 /dev/null .env.seed
+# Edit .env.seed now; do not enter credentials before permissions are restricted.
 set -a
 source .env.seed
 set +a
 .venv/bin/python scripts/seed_name_mappings.py /path/to/reviewed-mappings.csv --apply
 unset SUPABASE_URL SUPABASE_SERVICE_KEY
+# Only after a successful import; this local deletion cannot be undone.
+rm .env.seed
 ```
 
-The apply operation is atomic and retry-safe. It upserts the mappings in the file; it does not delete mappings absent from that file. Do not put real credentials in commands saved to shell history, documentation, source files, the CSV, issues, or chat.
+The apply operation is atomic and retry-safe. It upserts the mappings in the file; it does not delete mappings absent from that file. Keep the service key in a password manager so removing `.env.seed` does not remove your only copy. Do not put real credentials in commands saved to shell history, documentation, source files, the CSV, issues, or chat.
 
 ## Backup and security
 
