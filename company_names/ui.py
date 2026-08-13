@@ -44,7 +44,7 @@ def _review_styles() -> str:
         [data-testid="stAppViewContainer"] input,
         [data-testid="stAppViewContainer"] textarea,
         [data-testid="stAppViewContainer"] [data-baseweb="select"] * {
-            color: #000 !important;
+            color: #fff !important;
         }
         .name-review-legend { border: 2px solid #000; padding: .5rem; }
         .semantic-pill { color:#000 !important; border:2px solid #000; border-radius:999px;

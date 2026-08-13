@@ -135,7 +135,7 @@ def test_review_styles_render_css_braces_without_python_interpolation():
     assert '[data-testid="stAppViewContainer"]' in styles
     assert '[data-testid="stAppViewContainer"] input' in styles
     assert '[data-testid="stAppViewContainer"] button' in styles
-    assert "color: #000 !important" in styles
+    assert "color: #fff !important" in styles
     assert '<div class="name-review">' not in styles
     assert SEMANTIC_PILL_CSS.strip() in styles
 
