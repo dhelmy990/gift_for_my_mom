@@ -4,10 +4,14 @@ import pytest
 
 from company_names.models import Group, NameRecord, ReviewBoard
 from company_names.ui import (
+    SEMANTIC_PILL_CSS,
     _board_revision,
     _component_containers,
     _restore_container_ids,
     _semantic_pill_preview,
+    name_status,
+    review_widget_key,
+    search_options,
     add_selected_names,
     apply_sort_result,
     create_group,
@@ -244,3 +248,63 @@ def test_semantic_preview_rejects_invalid_source_actionably():
 
     with pytest.raises(ValueError, match="Alpha.*future-value"):
         _semantic_pill_preview(state)
+
+
+def test_every_report_name_is_searchable_with_current_status():
+    state = board()
+    state.names["Gamma"].excluded = True
+    state.names["Gamma"].selected = True
+
+    assert search_options(state) == ["Alpha", "alpha", "Beta", "Gamma"]
+    assert name_status(state, "Alpha") == "Alpha — Group: Alpha Group"
+    assert name_status(state, "alpha") == "alpha — In inventory"
+    assert name_status(state, "Beta") == "Beta — In inventory"
+    assert name_status(state, "Gamma") == "Gamma — Excluded"
+
+
+def test_searching_already_placed_names_does_not_move_or_duplicate_them():
+    state = board()
+
+    add_selected_names(state, ["Alpha", "Gamma", "Beta"])
+
+    assert state.names["Alpha"].group_id == "existing"
+    assert state.names["Gamma"].group_id is None
+    items = [
+        item["name"]
+        for container in sortable_containers(state)
+        for item in container["items"]
+    ]
+    assert items.count("Alpha") == 1
+
+
+def test_review_widget_keys_are_namespaced_by_request_and_parts():
+    assert (
+        review_widget_key("request-1", "group_title", "same-group")
+        == "name_review:request-1:group_title:same-group"
+    )
+    assert review_widget_key(
+        "request-2", "group_title", "same-group"
+    ) != review_widget_key("request-1", "group_title", "same-group")
+
+
+def test_semantic_preview_is_per_container_and_escapes_user_names():
+    state = board()
+    state.names["<script>alert(1)</script>"] = NameRecord(
+        "<script>alert(1)</script>", None, "suggested", True
+    )
+
+    preview = _semantic_pill_preview(state)
+
+    assert 'data-container="working"' in preview
+    assert 'class="semantic-pill source-exact"' in preview
+    assert 'class="semantic-pill source-suggested"' in preview
+    assert "<script>" not in preview
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in preview
+
+
+def test_semantic_pill_css_colors_each_source_class():
+    assert ".source-exact" in SEMANTIC_PILL_CSS
+    assert "#8FC5FF" in SEMANTIC_PILL_CSS
+    assert ".source-suggested" in SEMANTIC_PILL_CSS
+    assert "#FFD166" in SEMANTIC_PILL_CSS
+    assert ".source-unknown" in SEMANTIC_PILL_CSS

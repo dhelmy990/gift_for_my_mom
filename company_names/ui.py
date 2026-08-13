@@ -17,6 +17,11 @@ from .service import PreparedReview
 
 WORKING = "working"
 EXCLUDED = "excluded"
+SEMANTIC_PILL_CSS = """
+.semantic-pill.source-exact { background:#8FC5FF !important; border-color:#1769aa !important; }
+.semantic-pill.source-suggested { background:#FFD166 !important; border-color:#9a6700 !important; }
+.semantic-pill.source-unknown { background:#e9ecef !important; border-color:#555 !important; }
+"""
 
 
 def _item_id(cleaned_name: str) -> str:
@@ -135,6 +140,34 @@ def add_selected_names(board: ReviewBoard, selected: list[str]) -> None:
             record.excluded = False
 
 
+def search_options(board: ReviewBoard) -> list[str]:
+    """Return every report name; status formatting supplies its current location."""
+    return sorted(board.names, key=lambda value: (value.casefold(), value))
+
+
+def name_status(board: ReviewBoard, cleaned_name: str) -> str:
+    record = board.names[cleaned_name]
+    if not record.selected:
+        status = "In inventory"
+    elif record.excluded:
+        status = "Excluded"
+    elif record.group_id is None:
+        status = "Working tray"
+    else:
+        group = board.groups.get(record.group_id)
+        status = (
+            f"Group: {group.canonical_title.strip() or 'Untitled group'}"
+            if group
+            else "Unknown group"
+        )
+    return f"{cleaned_name} — {status}"
+
+
+def review_widget_key(request_id: str, *parts: str) -> str:
+    """Prevent a new prepared review from inheriting prior widget values."""
+    return ":".join(("name_review", str(request_id), *(str(part) for part in parts)))
+
+
 def return_to_inventory(board: ReviewBoard, cleaned_name: str) -> None:
     """Explicitly remove one name from all review-board containers."""
     if cleaned_name not in board.names:
@@ -223,27 +256,36 @@ def _restore_container_ids(result, source):
 
 
 def _semantic_pill_preview(board: ReviewBoard) -> str:
-    """Accessible color preview compensating for the string-only drag component."""
+    """Render colored, per-container pills beside the string-only drag component."""
     styles = {
         "exact": ("#8FC5FF", "Exact match"),
         "suggested": ("#FFD166", "Suggested match"),
-        "unknown": ("#FFFFFF", "Unmatched"),
+        "unknown": ("#e9ecef", "Unmatched"),
     }
-    pills = []
-    for name, record in sorted(board.names.items(), key=lambda item: (item[0].casefold(), item[0])):
-        if not record.selected:
-            continue
-        style = styles.get(record.source)
-        if style is None:
-            raise ValueError(
-                f"Selected name {name!r} has invalid source {record.source!r}"
+    sections = []
+    for container in sortable_containers(board):
+        pills = []
+        for item in container["items"]:
+            name = item["name"]
+            record = board.names[name]
+            style = styles.get(record.source)
+            if style is None:
+                raise ValueError(
+                    f"Selected name {name!r} has invalid source {record.source!r}"
+                )
+            color, meaning = style
+            escaped = html.escape(name, quote=True)
+            pills.append(
+                f'<span class="semantic-pill source-{record.source}" style="background:{color}" '
+                f'aria-label="{meaning}: {escaped}">{escaped}</span>'
             )
-        color, meaning = style
-        pills.append(
-            f'<span class="semantic-pill" style="background:{color}" '
-            f'aria-label="{meaning}: {html.escape(name)}">{html.escape(name)}</span>'
+        sections.append(
+            '<section class="semantic-container" '
+            f'data-container="{html.escape(str(container["id"]), quote=True)}">'
+            f'<strong>{html.escape(str(container["header"]))}</strong>'
+            f'{"".join(pills)}</section>'
         )
-    return "".join(pills)
+    return "".join(sections)
 
 
 def _move_record(board: ReviewBoard, name: str, destination: str) -> None:
@@ -272,7 +314,8 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
 
     del repository, embedder
     board = prepared.board
-    init_key = f"name_review_initialized_{prepared.pending_request_id or id(prepared)}"
+    request_id = str(prepared.pending_request_id or id(prepared))
+    init_key = review_widget_key(request_id, "initialized")
     if not st.session_state.get(init_key):
         for record in board.names.values():
             if record.source != "exact" and record.group_id is None:
@@ -284,12 +327,13 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         st.warning(warning)
 
     st.markdown(
-        """<style>
+        f"""<style>
         .name-review, .name-review * { color: #000 !important; }
         .name-review { background: #fff; border: 3px solid #000; padding: 1rem; }
         .name-review-legend { border: 2px solid #000; padding: .5rem; }
         .semantic-pill { color:#000 !important; border:2px solid #000; border-radius:999px;
                          display:inline-block; margin:.25rem; padding:.25rem .6rem; font-weight:700; }
+        {SEMANTIC_PILL_CSS}
         </style><div class="name-review"><h2>Review company names</h2></div>""",
         unsafe_allow_html=True,
     )
@@ -299,11 +343,11 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         "the exclusion area has a dashed boundary.</div>",
         unsafe_allow_html=True,
     )
-    inventory = sorted(name for name, record in board.names.items() if not record.selected)
-    search_key = f"name_search_{prepared.pending_request_id}"
+    search_key = review_widget_key(request_id, "search")
     st.multiselect(
         "Find names from this report",
-        options=inventory,
+        options=search_options(board),
+        format_func=lambda name: name_status(board, name),
         placeholder="Search cleaned company names",
         key=search_key,
         on_change=_add_from_search,
@@ -314,14 +358,22 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         projected_containers = sortable_containers(board)
     except ValueError as exc:
         st.error(f"Review state is invalid: {exc}")
-        st.button("Submit final review", disabled=True)
+        st.button(
+            "Submit final review",
+            key=review_widget_key(request_id, "invalid_board_submit"),
+            disabled=True,
+        )
         return None
 
     try:
         preview = _semantic_pill_preview(board)
     except ValueError as exc:
         st.error(f"Review state is invalid: {exc}")
-        st.button("Submit final review", disabled=True)
+        st.button(
+            "Submit final review",
+            key=review_widget_key(request_id, "invalid_source_submit"),
+            disabled=True,
+        )
         return None
     st.markdown(
         f'<div aria-label="Selected name color preview">{preview}</div>',
@@ -337,9 +389,9 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         group.canonical_title = st.text_input(
             "Canonical title",
             value=group.canonical_title,
-            key=f"group_title_{group.id}",
+            key=review_widget_key(request_id, "group_title", group.id),
         )
-    if st.button("Create group", key=f"create_group_{prepared.pending_request_id}"):
+    if st.button("Create group", key=review_widget_key(request_id, "create_group")):
         create_group(board)
         st.rerun()
 
@@ -350,11 +402,11 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         result = sort_items(
             _component_containers(containers),
             multi_containers=True,
-            key=f"name_board_{prepared.pending_request_id}_{_board_revision(board)}",
+            key=review_widget_key(request_id, "board", _board_revision(board)),
             custom_style="""
               .sortable-component { color:#000 !important; border:2px solid #000 !important; }
               .sortable-container:last-child { border:3px dashed #000 !important; }
-              .sortable-item { color:#000 !important; background:#fff !important; border:2px solid #000 !important; }
+              .sortable-item { color:#000 !important; background:#e9ecef !important; border:2px solid #555 !important; }
             """,
         )
         apply_sort_result(board, _restore_container_ids(result, containers))
@@ -364,7 +416,11 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         st.warning("The board returned an incomplete update. No names were moved; please try again.")
 
     with st.expander("Accessible name movement controls"):
-        chosen = st.selectbox("Name", options=[""] + sorted(board.names))
+        chosen = st.selectbox(
+            "Name",
+            options=[""] + search_options(board),
+            key=review_widget_key(request_id, "move_name"),
+        )
         if chosen:
             destinations = ["Inventory", "Working tray"] + [
                 f"group:{group.id}" for group in board.groups.values()
@@ -377,8 +433,9 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
                 f"Move {chosen} to",
                 destinations,
                 format_func=lambda value: labels.get(value, value),
+                key=review_widget_key(request_id, "move_destination"),
             )
-            if st.button("Move name", key=f"move_{prepared.pending_request_id}"):
+            if st.button("Move name", key=review_widget_key(request_id, "move")):
                 _move_record(board, chosen, destination)
                 st.rerun()
 
@@ -387,5 +444,10 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
         st.error("Review is not ready: " + " ".join(errors))
     else:
         st.success("Review ready. Final authorization and submission are added in the next step.")
-    st.button("Submit final review", disabled=True, help="Authorization is added in Task 8")
+    st.button(
+        "Submit final review",
+        key=review_widget_key(request_id, "submit"),
+        disabled=True,
+        help="Authorization is added in Task 8",
+    )
     return None
