@@ -419,6 +419,25 @@ def review_summary(board: ReviewBoard) -> dict[str, int]:
     }
 
 
+def save_summary_lines(board: ReviewBoard) -> list[str]:
+    """Describe the save result in plain language with natural plurals."""
+    summary = review_summary(board)
+
+    def count_label(count: int, singular: str, plural: str) -> str:
+        return f"{count} {singular if count == 1 else plural}"
+
+    return [
+        count_label(summary["separate"], "separate company", "separate companies"),
+        count_label(summary["combined_groups"], "combined group", "combined groups"),
+        count_label(summary["combined_names"], "name combined", "names combined"),
+        count_label(
+            summary["excluded"],
+            "name left out of this report",
+            "names left out of this report",
+        ),
+    ]
+
+
 def review_errors(
     board: ReviewBoard, title_errors: dict[str, str]
 ) -> list[str]:
@@ -858,12 +877,8 @@ def render_name_review(
         st.error("Review is not ready:\n\n" + "\n\n".join(f"- {error}" for error in errors))
 
     st.subheader("3. Review and save")
-    summary = review_summary(board)
-    st.write(
-        f"{summary['separate']} separate companies · "
-        f"{summary['combined_groups']} combined groups · "
-        f"{summary['excluded']} left out"
-    )
+    for line in save_summary_lines(board):
+        st.write(line)
 
     unlocked = bool(st.session_state.get("mapping_admin_unlocked"))
     if not admin_password:
@@ -876,7 +891,7 @@ def render_name_review(
         with st.form(review_widget_key(request_id, "admin_unlock")):
             st.text_input("Admin password", type="password", key=password_key)
             st.form_submit_button(
-                "Confirm admin password",
+                "Enter admin password to save",
                 on_click=_unlock_admin,
                 args=(admin_password, password_key),
                 disabled=bool(auth_retry_after),
@@ -886,6 +901,13 @@ def render_name_review(
         auth_error = st.session_state.pop("mapping_admin_auth_error", None)
         if auth_error:
             st.error(auth_error)
+
+    clicked = st.button(
+        "Save mappings and show totals",
+        key=review_widget_key(request_id, "submit"),
+        disabled=bool(errors) or not unlocked or not bool(admin_password),
+        help="Resolve names in the Working tray and confirm the admin password first.",
+    )
 
     unlocked = bool(st.session_state.get("mapping_admin_unlocked"))
     if unlocked and admin_password:
@@ -904,12 +926,6 @@ def render_name_review(
                         key=review_widget_key(request_id, "backup_download"),
                     )
 
-    clicked = st.button(
-        "Save mappings and show totals",
-        key=review_widget_key(request_id, "submit"),
-        disabled=bool(errors) or not unlocked or not bool(admin_password),
-        help="Resolve names in the Working tray and confirm the admin password first.",
-    )
     if clicked:
         # A retry is a new display attempt even when its database request ID is
         # intentionally reused. Never leave prior totals visible if it fails.

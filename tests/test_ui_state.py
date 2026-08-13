@@ -1,4 +1,5 @@
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +36,7 @@ from company_names.ui import (
     move_to_tray,
     move_tray_to_group,
     review_summary,
+    save_summary_lines,
     review_errors,
     semantic_pill,
     return_to_separate,
@@ -328,6 +330,46 @@ def test_review_summary_counts_locations_and_only_referenced_groups():
         "tray": 1,
         "excluded": 1,
     }
+
+
+def test_save_summary_lines_use_plain_singular_labels():
+    state = board()
+    state.names["Gamma"].excluded = True
+    move_to_tray(state, ["Beta"])
+
+    assert save_summary_lines(state) == [
+        "1 separate company",
+        "1 combined group",
+        "1 name combined",
+        "1 name left out of this report",
+    ]
+
+
+def test_save_summary_lines_use_natural_plural_labels():
+    state = board()
+    state.names["alpha"].selected = True
+    state.names["alpha"].group_id = "existing"
+    state.names["Gamma"].selected = False
+
+    assert save_summary_lines(state) == [
+        "2 separate companies",
+        "1 combined group",
+        "2 names combined",
+        "0 names left out of this report",
+    ]
+
+
+def test_save_and_backup_controls_use_task_oriented_copy_in_display_order():
+    source = Path("company_names/ui.py").read_text()
+
+    save_position = source.index('review_widget_key(request_id, "submit")')
+    backup_position = source.index('st.expander("Backup and recovery")')
+
+    assert "Enter admin password to save" in source
+    assert '"Confirm admin password"' not in source
+    assert save_position < backup_position
+    assert "Download a CSV copy of all permanent company-name mappings." in source
+    assert 'st.button("Prepare backup file"' in source
 
 
 def test_sortable_uses_opaque_unique_ids_for_case_differing_labels():
