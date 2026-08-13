@@ -12,6 +12,7 @@ from company_names.review import singleton_group_id
 from company_names.service import (
     PreparedReview,
     ServiceValidationError,
+    _prepare_submission_payload,
     collate_extracted_rows,
     normalize_extracted_rows,
     prepare_review,
@@ -316,6 +317,37 @@ def test_submit_embeds_materialized_singleton_title_and_member() -> None:
     payload = repo.submissions[0]
     assert len(payload.groups[0]["title_embedding"]) == 384
     assert len(payload.mappings[0]["member_embedding"]) == 384
+
+
+def test_prepare_payload_returns_the_exact_materialized_singleton_board() -> None:
+    review = ReviewBoard(
+        groups={},
+        names={"Alpha": NameRecord("Alpha", None, "unknown", selected=False)},
+    )
+    request_id = "22222222-2222-4222-8222-222222222222"
+
+    payload, embedding_failed, materialized = _prepare_submission_payload(
+        review,
+        {},
+        FakeEmbedder(),
+        request_id,
+        {},
+    )
+
+    singleton_id = singleton_group_id("Alpha")
+    assert materialized is not review
+    assert review.groups == {}
+    assert review.names["Alpha"].selected is False
+    assert review.names["Alpha"].group_id is None
+    assert materialized.names["Alpha"].selected is True
+    assert materialized.names["Alpha"].group_id == singleton_id
+    assert set(materialized.groups) == {singleton_id}
+    assert payload.request_id == request_id
+    assert payload.groups[0]["id"] == singleton_id
+    assert payload.mappings[0]["group_id"] == singleton_id
+    assert len(payload.groups[0]["title_embedding"]) == 384
+    assert len(payload.mappings[0]["member_embedding"]) == 384
+    assert embedding_failed is False
 
 
 def _separate_alpha_review() -> PreparedReview:
