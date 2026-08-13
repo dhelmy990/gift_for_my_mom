@@ -87,6 +87,43 @@ def test_materialize_singletons_leaves_grouped_and_excluded_names_unchanged() ->
     assert materialized.names["Exact Alias"] is not review.names["Exact Alias"]
 
 
+@pytest.mark.parametrize("cleaned_name", ["Alpha Travel", "alpha-travel"])
+def test_materialize_singletons_reuses_matching_empty_existing_group(
+    cleaned_name: str,
+) -> None:
+    review = board(
+        groups=[Group("existing", "Alpha Travel", True)],
+        names=[NameRecord(cleaned_name, None, "unknown")],
+    )
+
+    materialized = materialize_singletons(review)
+
+    assert materialized.groups == {
+        "existing": Group("existing", "Alpha Travel", True)
+    }
+    assert materialized.names[cleaned_name].selected is True
+    assert materialized.names[cleaned_name].group_id == "existing"
+
+
+def test_materialize_singletons_rejects_multiple_matching_group_titles() -> None:
+    review = board(
+        groups=[
+            Group("second", "alpha-travel", True),
+            Group("first", "Alpha Travel", True),
+        ],
+        names=[NameRecord("Alpha Travel", None, "unknown")],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Cannot materialize singleton for Alpha Travel: normalized title "
+            "matches multiple groups: first, second"
+        ),
+    ):
+        materialize_singletons(review)
+
+
 def test_materialize_singletons_rejects_a_conflicting_derived_group_id() -> None:
     singleton_id = singleton_group_id("Alpha Travel")
     review = board(
@@ -379,7 +416,7 @@ def test_build_submission_materializes_unseen_separate_names_deterministically()
     assert review.groups == {}
 
 
-def test_build_submission_rejects_duplicate_title_created_by_materialization() -> None:
+def test_build_submission_reuses_matching_populated_existing_group() -> None:
     review = board(
         groups=[Group("existing", "Alpha Travel", True)],
         names=[
@@ -388,13 +425,36 @@ def test_build_submission_rejects_duplicate_title_created_by_materialization() -
         ],
     )
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Duplicate populated group title: Alpha Travel / Alpha Travel"
-        ),
-    ):
-        build_submission(review, {"Existing Alias": "existing"})
+    payload = build_submission(review, {"Existing Alias": "existing"})
+
+    assert payload.groups == [
+        {"id": "existing", "canonical_title": "Alpha Travel", "existing": True}
+    ]
+    assert payload.mappings == [
+        {"cleaned_name": "Alpha Travel", "group_id": "existing"},
+        {"cleaned_name": "Existing Alias", "group_id": "existing"},
+    ]
+    assert payload.unmap_names == []
+
+
+@pytest.mark.parametrize("cleaned_name", ["Alpha Travel", "alpha-travel"])
+def test_build_submission_reuses_matching_empty_existing_group(
+    cleaned_name: str,
+) -> None:
+    review = board(
+        groups=[Group("existing", "Alpha Travel", True)],
+        names=[NameRecord(cleaned_name, None, "unknown")],
+    )
+
+    payload = build_submission(review, {})
+
+    assert payload.groups == [
+        {"id": "existing", "canonical_title": "Alpha Travel", "existing": True}
+    ]
+    assert payload.mappings == [
+        {"cleaned_name": cleaned_name, "group_id": "existing"}
+    ]
+    assert payload.unmap_names == []
 
 
 def test_build_submission_keeps_unchanged_exact_mapping_without_unmapping() -> None:

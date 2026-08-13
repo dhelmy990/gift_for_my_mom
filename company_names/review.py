@@ -30,13 +30,37 @@ def singleton_group_id(cleaned_name: str) -> str:
 def materialize_singletons(board: ReviewBoard) -> ReviewBoard:
     """Copy a board and turn Separate-company records into singleton groups."""
     materialized = deepcopy(board)
+    group_ids_by_title: dict[str, list[str]] = {}
+    for group_id, group in materialized.groups.items():
+        try:
+            normalized_title = normalize_lookup_key(group.canonical_title)
+        except ValueError:
+            continue
+        group_ids_by_title.setdefault(normalized_title, []).append(group_id)
+
     for cleaned_name in sorted(materialized.names):
         record = materialized.names[cleaned_name]
         if not record.selected and not record.excluded and record.group_id is None:
+            matching_group_ids = sorted(
+                group_ids_by_title.get(normalize_lookup_key(cleaned_name), [])
+            )
+            if len(matching_group_ids) > 1:
+                matches = ", ".join(matching_group_ids)
+                raise ValueError(
+                    f"Cannot materialize singleton for {cleaned_name}: normalized "
+                    f"title matches multiple groups: {matches}"
+                )
+            if matching_group_ids:
+                record.selected = True
+                record.group_id = matching_group_ids[0]
+                continue
+
             group_id = singleton_group_id(cleaned_name)
             existing_group = materialized.groups.get(group_id)
             if existing_group is None:
                 materialized.groups[group_id] = Group(group_id, cleaned_name, False)
+                normalized_title = normalize_lookup_key(cleaned_name)
+                group_ids_by_title.setdefault(normalized_title, []).append(group_id)
             elif (
                 existing_group.id != group_id
                 or existing_group.canonical_title != cleaned_name
