@@ -260,6 +260,44 @@ def test_submit_prepared_review_reuses_request_id_after_ambiguous_failure():
     assert [p.request_id for p in repo.submissions] == [prepared.pending_request_id] * 2
 
 
+def test_submit_review_rejects_unresolved_working_tray_before_repository_write():
+    review = ReviewBoard(
+        groups={},
+        names={"Alpha": NameRecord("Alpha", None, "unknown", selected=True)},
+    )
+    repo = FakeRepository()
+    request_id = "22222222-2222-4222-8222-222222222222"
+
+    with pytest.raises(ServiceValidationError, match="working tray"):
+        submit_review(review, {}, repo, FakeEmbedder(), request_id=request_id)
+
+    assert repo.submissions == []
+
+
+def test_submit_prepared_review_rejects_unresolved_tray_and_preserves_request_id():
+    prepared = PreparedReview(
+        board=ReviewBoard(
+            groups={},
+            names={"Alpha": NameRecord("Alpha", None, "unknown", selected=True)},
+        ),
+        original_mappings={},
+        suggestions={},
+        rows=pd.DataFrame(
+            [{"cleaned_name": "Alpha", "rns": 1.0, "revenue": 1.0}]
+        ),
+        warnings=[],
+        pending_request_id="22222222-2222-4222-8222-222222222222",
+    )
+    repo = FakeRepository()
+    request_id = prepared.pending_request_id
+
+    with pytest.raises(ServiceValidationError, match="working tray"):
+        submit_prepared_review(prepared, repo, FakeEmbedder())
+
+    assert repo.submissions == []
+    assert prepared.pending_request_id == request_id
+
+
 def test_normalize_rejects_nonfinite_grouped_totals():
     rows = pd.DataFrame({"agent_name": ["Acme", "Acme Ltd"], "rns": [1e308, 1e308], "revenue": [1, 1]})
     with pytest.raises(ServiceValidationError, match="aggregate"):

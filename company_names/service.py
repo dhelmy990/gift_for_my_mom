@@ -326,6 +326,9 @@ def _prepare_submission_payload(
     known_group_titles: dict[str, str] | None,
 ) -> tuple[SubmissionPayload, bool, ReviewBoard]:
     """Build one payload, falling back cleanly when optional embeddings fail."""
+    errors = validate_submission(board)
+    if errors:
+        raise ServiceValidationError("\n".join(errors))
     materialized = materialize_singletons(board, original_mappings)
     payload = _build_submission_from_materialized(
         materialized, original_mappings, request_id=request_id
