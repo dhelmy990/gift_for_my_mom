@@ -63,13 +63,13 @@ you need stronger protection.
 
 Anyone may view the deployed app, but only someone with this password should be able to submit permanent mapping changes or download the backup.
 
-## 5. Configure Streamlit Community Cloud
+## 5. Deploy and configure Streamlit Community Cloud
 
 1. Open <https://share.streamlit.io/>.
-2. Find this deployed app.
-3. Open its menu and select **Settings**.
-4. Open **Secrets**.
-5. Paste the following configuration, replacing all three placeholder values:
+2. Select **Create app** and connect GitHub if prompted.
+3. Select this GitHub repository, the `main` branch, and `app.py` as the entrypoint.
+4. Open **Advanced settings**. Select Python 3.10 when a Python-version selector is available; the project is tested with Python 3.10.12.
+5. In **Secrets**, paste the following configuration, replacing all three placeholder values:
 
 ```toml
 SUPABASE_URL = "https://YOUR-PROJECT.supabase.co"
@@ -77,10 +77,17 @@ SUPABASE_SERVICE_KEY = "YOUR-SERVER-SIDE-SECRET-KEY"
 ADMIN_PASSWORD = "YOUR-SEPARATE-SHARED-ADMIN-PASSWORD"
 ```
 
-6. Save the secrets.
-7. Reboot the app if Streamlit does not do so automatically.
+6. Save the settings and select **Deploy**.
+7. Reboot the app if a later secrets change does not restart it automatically.
 
 Keep the quotation marks. Do not add this configuration to GitHub.
+
+Community Cloud automatically installs the root `requirements.txt`; confirm it is
+present and still pins `fastembed==0.7.4` before deployment. Do not install FastEmbed
+separately with `apt`. The first vector-matching use downloads
+`BAAI/bge-small-en-v1.5` at runtime. Its cache can be lost when the app reboots or is
+rescheduled, so a later first use may download it again. The integration test verifies
+that this model produces the schema's required 384-dimensional vectors.
 
 ## 6. Optional local configuration
 
@@ -129,21 +136,35 @@ Backups are especially sensible before bulk regrouping or renaming canonical gro
 
 ## Optional: import reviewed mappings from CSV
 
-After creating the database tables, you can validate a reviewed CSV locally without
-connecting to Supabase or loading the embedding model:
+After creating the database tables, you can validate either a reviewed CSV or a
+downloaded app backup locally without connecting to Supabase or loading the embedding
+model. A reviewed file must have exactly `input_text,target_text,remarks`; an exported
+backup has exactly `cleaned_name,canonical_title`:
 
 ```bash
-python3 scripts/seed_name_mappings.py company_name_normalization_finetuning.csv
+python3 scripts/seed_name_mappings.py /path/to/reviewed-mappings.csv
 ```
 
 Review the reported mapping and group counts. To submit the same validated file,
-provide the server credentials as environment variables and opt in with `--apply`:
+create an ignored `.env.seed` file with a text editor. Put one `SUPABASE_URL=...` and
+one `SUPABASE_SERVICE_KEY=...` line in it, never commit it, and then load it and opt in
+with `--apply`:
 
 ```bash
-export SUPABASE_URL="https://YOUR-PROJECT.supabase.co"
-export SUPABASE_SERVICE_KEY="YOUR-SERVER-SIDE-SECRET-KEY"
-python3 scripts/seed_name_mappings.py company_name_normalization_finetuning.csv --apply
+chmod 600 .env.seed
+set -a
+source .env.seed
+set +a
+python3 scripts/seed_name_mappings.py /path/to/reviewed-mappings.csv --apply
+unset SUPABASE_URL SUPABASE_SERVICE_KEY
 ```
+
+This avoids putting the service key in shell history. Any downloaded two-column backup
+can be used for either the dry run or `--apply`. Import is additive/upsert-based: it
+creates or updates the supplied mappings but does not delete database mappings missing
+from the CSV. It is therefore not a full snapshot restore. A full point-in-time restore
+requires a clean Supabase project or newly created empty tables and is not automated by
+this repository; this guide intentionally provides no destructive purge command.
 
 The importer derives its request ID from the normalized logical mappings, so retrying
 the same CSV after a lost response reuses the same atomic RPC identity. The app also
@@ -153,9 +174,9 @@ previous result, while reuse with a different payload is rejected. Embeddings ar
 generated in bounded batches of 64 while the database update remains one atomic
 submission.
 
-The importer does not need `ADMIN_PASSWORD`. Replace the placeholders only in your
-local shell; never put real credentials in this document, the CSV, source code, or
-Git commits.
+The importer does not need `ADMIN_PASSWORD`. Never put real credentials in this
+document, the CSV, source code, shell command arguments, or Git commits. Delete the
+local `.env.seed` when it is no longer needed.
 
 ## Troubleshooting
 

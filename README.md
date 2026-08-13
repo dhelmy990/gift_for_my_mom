@@ -9,7 +9,7 @@ Collation mode stores approved name mappings in Supabase. Its review screen supp
 
 ## Local setup
 
-Python 3.10 or newer is required. Create a virtual environment inside the project so its packages do not affect the rest of your system:
+Python 3.10 or newer is required. The project is tested with Python 3.10.12; use Python 3.10 for local development and select 3.10 in Community Cloud's advanced settings when that option is available. Create a virtual environment inside the project so its packages do not affect the rest of your system:
 
 ```bash
 python3 -m venv .venv
@@ -55,21 +55,24 @@ Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor befo
 
 See [the setup guide](docs/SUPABASE_SETUP.md) for project creation, secrets, deployment, persistence verification, retries, and security details.
 
-To validate the repository's reviewed CSV without connecting to Supabase or loading the embedding model:
+To validate a reviewed CSV without connecting to Supabase or loading the embedding model:
 
 ```bash
-.venv/bin/python scripts/seed_name_mappings.py company_name_normalization_finetuning.csv
+.venv/bin/python scripts/seed_name_mappings.py /path/to/reviewed-mappings.csv
 ```
 
-After reviewing the counts, explicitly apply it with server credentials in your local environment:
+The importer accepts either an exact three-column reviewed file (`input_text,target_text,remarks`) or an exact two-column backup exported by the app (`cleaned_name,canonical_title`). After reviewing the counts, put the server credentials in an ignored local file named `.env.seed` using a text editor, with one `SUPABASE_URL=...` and one `SUPABASE_SERVICE_KEY=...` line. Never commit this file. Load it without putting the service key in shell history, explicitly apply the CSV, then clear the variables:
 
 ```bash
-export SUPABASE_URL="https://YOUR-PROJECT.supabase.co"
-export SUPABASE_SERVICE_KEY="YOUR-SERVER-SIDE-SECRET-KEY"
-.venv/bin/python scripts/seed_name_mappings.py company_name_normalization_finetuning.csv --apply
+chmod 600 .env.seed
+set -a
+source .env.seed
+set +a
+.venv/bin/python scripts/seed_name_mappings.py /path/to/reviewed-mappings.csv --apply
+unset SUPABASE_URL SUPABASE_SERVICE_KEY
 ```
 
-The apply operation is atomic and retry-safe. Do not put real credentials in commands saved to shell history, documentation, source files, the CSV, issues, or chat.
+The apply operation is atomic and retry-safe. It upserts the mappings in the file; it does not delete mappings absent from that file. Do not put real credentials in commands saved to shell history, documentation, source files, the CSV, issues, or chat.
 
 ## Backup and security
 
