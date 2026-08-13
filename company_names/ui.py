@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pandas as pd
 
+from .cleaning import normalize_lookup_key
 from .models import Group, ReviewBoard
 from .review import validate_board
 from .review_session import clear_final_results
@@ -172,16 +173,23 @@ def apply_sort_result_changed(
     return board_location_revision(board) != before
 
 
-def add_selected_names(board: ReviewBoard, selected: list[str]) -> None:
-    """Move inventory records into the working tray, idempotently."""
-    for name in dict.fromkeys(selected):
+def move_to_tray(board: ReviewBoard, names: list[str]) -> None:
+    """Move known report names from any location into the working tray."""
+    unique_names = list(dict.fromkeys(names))
+    for name in unique_names:
         if name not in board.names:
             raise KeyError(name)
+
+    for name in unique_names:
         record = board.names[name]
-        if not record.selected:
-            record.selected = True
-            record.group_id = None
-            record.excluded = False
+        record.selected = True
+        record.group_id = None
+        record.excluded = False
+
+
+def add_selected_names(board: ReviewBoard, selected: list[str]) -> None:
+    """Compatibility helper for moving search selections into the tray."""
+    move_to_tray(board, selected)
 
 
 def search_options(board: ReviewBoard) -> list[str]:
@@ -192,9 +200,9 @@ def search_options(board: ReviewBoard) -> list[str]:
 def name_status(board: ReviewBoard, cleaned_name: str) -> str:
     record = board.names[cleaned_name]
     if not record.selected:
-        status = "In inventory"
+        status = "Separate company"
     elif record.excluded:
-        status = "Excluded"
+        status = "Left out of this report"
     elif record.group_id is None:
         status = "Working tray"
     else:
@@ -218,14 +226,94 @@ def apply_group_titles(board: ReviewBoard, values: dict[str, str]) -> None:
         board.groups[group_id].canonical_title = title
 
 
-def return_to_inventory(board: ReviewBoard, cleaned_name: str) -> None:
-    """Explicitly remove one name from all review-board containers."""
+def return_to_separate(board: ReviewBoard, cleaned_name: str) -> None:
+    """Return one report name to the separate-company list."""
     if cleaned_name not in board.names:
         raise KeyError(cleaned_name)
     record = board.names[cleaned_name]
     record.selected = False
     record.group_id = None
     record.excluded = False
+
+
+def return_to_inventory(board: ReviewBoard, cleaned_name: str) -> None:
+    """Compatibility alias for returning a name to separate companies."""
+    return_to_separate(board, cleaned_name)
+
+
+def _tray_names(board: ReviewBoard) -> list[str]:
+    return [
+        name
+        for name, record in board.names.items()
+        if record.selected and record.group_id is None and not record.excluded
+    ]
+
+
+def group_creation_error(board: ReviewBoard, title: str) -> str | None:
+    """Return the first actionable error for creating a combined group."""
+    trimmed_title = title.strip()
+    if not trimmed_title:
+        return "Enter the final company name."
+    if len(_tray_names(board)) < 2:
+        return "Add at least two names to the working tray."
+    try:
+        normalized_title = normalize_lookup_key(trimmed_title)
+    except ValueError:
+        return "Enter a usable final company name."
+
+    matches = sorted(
+        (
+            group
+            for group in board.groups.values()
+            if _normalized_group_title(group.canonical_title) == normalized_title
+        ),
+        key=lambda group: group.id,
+    )
+    if matches:
+        return (
+            f"A group named ‘{matches[0].canonical_title}’ already exists. "
+            "Move these names into that group instead."
+        )
+    return None
+
+
+def _normalized_group_title(title: str) -> str | None:
+    try:
+        return normalize_lookup_key(title)
+    except ValueError:
+        return None
+
+
+def create_combined_group(board: ReviewBoard, title: str) -> Group:
+    """Create a group from every name currently in the working tray."""
+    error = group_creation_error(board, title)
+    if error:
+        raise ValueError(error)
+    tray_names = _tray_names(board)
+    group = Group(f"new-{uuid4()}", title.strip(), False)
+    board.groups[group.id] = group
+    for name in tray_names:
+        record = board.names[name]
+        record.selected = True
+        record.group_id = group.id
+        record.excluded = False
+    return group
+
+
+def review_summary(board: ReviewBoard) -> dict[str, int]:
+    """Return stable counts for the singleton-first review locations."""
+    grouped_names = [
+        record
+        for record in board.names.values()
+        if record.selected and record.group_id is not None and not record.excluded
+    ]
+    return {
+        "separate": sum(not record.selected for record in board.names.values()),
+        "combined_groups": len({record.group_id for record in grouped_names}),
+        "combined_names": len(grouped_names),
+        "tray": len(_tray_names(board)),
+        "excluded": sum(record.excluded for record in board.names.values()),
+    }
 
 
 def create_group(board: ReviewBoard) -> Group:

@@ -20,6 +20,11 @@ from company_names.ui import (
     apply_sort_result_changed,
     board_location_revision,
     create_group,
+    create_combined_group,
+    group_creation_error,
+    move_to_tray,
+    review_summary,
+    return_to_separate,
     return_to_inventory,
     sortable_containers,
 )
@@ -82,6 +87,116 @@ def test_selecting_inventory_adds_each_name_to_working_tray_once():
         "Beta",
         "Gamma",
     ]
+
+
+def test_move_to_tray_resets_separate_grouped_and_excluded_names_idempotently():
+    state = board()
+    state.names["Beta"].persisted_name = "Beta-Ltd"
+    state.names["Gamma"].excluded = True
+
+    move_to_tray(state, ["Beta", "Alpha", "Gamma", "Alpha"])
+    move_to_tray(state, ["Beta", "Alpha", "Gamma"])
+
+    for name in ["Beta", "Alpha", "Gamma"]:
+        record = state.names[name]
+        assert (record.selected, record.group_id, record.excluded) == (True, None, False)
+    assert state.names["Beta"].persisted_name == "Beta-Ltd"
+
+
+def test_move_to_tray_validates_every_key_before_mutating():
+    state = board()
+    before = deepcopy(state)
+
+    with pytest.raises(KeyError, match="Missing"):
+        move_to_tray(state, ["Beta", "Missing"])
+
+    assert state == before
+
+
+def test_return_to_separate_preserves_identity_metadata():
+    state = board()
+    state.names["Alpha"].persisted_name = "Alpha-Ltd"
+
+    return_to_separate(state, "Alpha")
+
+    assert (
+        state.names["Alpha"].selected,
+        state.names["Alpha"].group_id,
+        state.names["Alpha"].excluded,
+    ) == (False, None, False)
+    assert state.names["Alpha"].source == "exact"
+    assert state.names["Alpha"].persisted_name == "Alpha-Ltd"
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("   ", "Enter the final company name."),
+        ("Ltd.", "Enter a usable final company name."),
+    ],
+)
+def test_group_creation_error_validates_title(title, expected):
+    state = board()
+    move_to_tray(state, ["Beta", "Gamma"])
+
+    assert group_creation_error(state, title) == expected
+
+
+def test_group_creation_error_requires_two_tray_names_before_normalizing_title():
+    state = board()
+
+    assert group_creation_error(state, "Ltd.") == "Add at least two names to the working tray."
+
+
+def test_group_creation_error_detects_normalized_title_conflict_deterministically():
+    state = board()
+    state.groups["aaa"] = Group("aaa", "ALPHA_GROUP PTE LTD", False)
+    move_to_tray(state, ["Beta", "Gamma"])
+
+    assert group_creation_error(state, " alpha group ltd. ") == (
+        "A group named ‘ALPHA_GROUP PTE LTD’ already exists. "
+        "Move these names into that group instead."
+    )
+
+
+def test_create_combined_group_moves_all_tray_names_and_preserves_metadata():
+    state = board()
+    state.names["Beta"].persisted_name = "Beta-Ltd"
+    move_to_tray(state, ["Beta", "Gamma"])
+
+    group = create_combined_group(state, "  Beta Gamma Holdings  ")
+
+    assert group.id.startswith("new-")
+    assert state.groups[group.id] is group
+    assert group.canonical_title == "Beta Gamma Holdings"
+    assert group.existing is False
+    assert all(state.names[name].group_id == group.id for name in ["Beta", "Gamma"])
+    assert state.names["Beta"].persisted_name == "Beta-Ltd"
+    assert review_summary(state)["tray"] == 0
+
+
+def test_create_combined_group_rejects_invalid_state_without_mutation():
+    state = board()
+    before = deepcopy(state)
+
+    with pytest.raises(ValueError, match="at least two"):
+        create_combined_group(state, "New title")
+
+    assert state == before
+
+
+def test_review_summary_counts_locations_and_only_referenced_groups():
+    state = board()
+    state.names["Gamma"].excluded = True
+    move_to_tray(state, ["Beta"])
+
+    assert review_summary(state) == {
+        "separate": 1,
+        "combined_groups": 1,
+        "combined_names": 1,
+        "tray": 1,
+        "excluded": 1,
+    }
 
 
 def test_sortable_uses_opaque_unique_ids_for_case_differing_labels():
@@ -317,18 +432,20 @@ def test_every_report_name_is_searchable_with_current_status():
 
     assert search_options(state) == ["Alpha", "alpha", "Beta", "Gamma"]
     assert name_status(state, "Alpha") == "Alpha — Group: Alpha Group"
-    assert name_status(state, "alpha") == "alpha — In inventory"
-    assert name_status(state, "Beta") == "Beta — In inventory"
-    assert name_status(state, "Gamma") == "Gamma — Excluded"
+    assert name_status(state, "alpha") == "alpha — Separate company"
+    assert name_status(state, "Beta") == "Beta — Separate company"
+    assert name_status(state, "Gamma") == "Gamma — Left out of this report"
 
 
-def test_searching_already_placed_names_does_not_move_or_duplicate_them():
+def test_searching_already_placed_names_moves_them_to_tray_without_duplicates():
     state = board()
+    state.names["Gamma"].excluded = True
 
     add_selected_names(state, ["Alpha", "Gamma", "Beta"])
 
-    assert state.names["Alpha"].group_id == "existing"
+    assert state.names["Alpha"].group_id is None
     assert state.names["Gamma"].group_id is None
+    assert state.names["Gamma"].excluded is False
     items = [
         item["name"]
         for container in sortable_containers(state)
