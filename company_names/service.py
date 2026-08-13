@@ -19,7 +19,12 @@ from .csv_safety import csv_safe_cell
 from .matching import EMBEDDING_DIMENSION, EmbeddingProvider, Suggestion, rank_candidates
 from .models import Group, NameRecord, ReviewBoard, SubmissionPayload
 from .repository import MappingRepository, RepositoryUnavailableError
-from .review import aggregate_by_group, build_submission, validate_submission
+from .review import (
+    _build_submission_from_materialized,
+    aggregate_by_group,
+    materialize_singletons,
+    validate_submission,
+)
 
 EMBEDDING_BATCH_SIZE = 128
 
@@ -303,7 +308,7 @@ def submit_review(
         known_group_titles = {
             group.id: group.canonical_title for group in repository.list_groups()
         }
-    payload, _ = _prepare_submission_payload(
+    payload, _, _ = _prepare_submission_payload(
         board,
         original_mappings,
         embedder,
@@ -319,9 +324,12 @@ def _prepare_submission_payload(
     embedder: EmbeddingProvider,
     request_id: str,
     known_group_titles: dict[str, str] | None,
-) -> tuple[SubmissionPayload, bool]:
+) -> tuple[SubmissionPayload, bool, ReviewBoard]:
     """Build one payload, falling back cleanly when optional embeddings fail."""
-    payload = build_submission(board, original_mappings, request_id=request_id)
+    materialized = materialize_singletons(board, original_mappings)
+    payload = _build_submission_from_materialized(
+        materialized, original_mappings, request_id=request_id
+    )
     persisted_groups = known_group_titles or {}
     changed_groups = [group for group in payload.groups if (
         not group["existing"]
@@ -330,7 +338,7 @@ def _prepare_submission_payload(
     )]
     unchanged_storage_mappings = {
         (record.persisted_name or record.cleaned_name, original_mappings[report_name])
-        for report_name, record in board.names.items()
+        for report_name, record in materialized.names.items()
         if report_name in original_mappings
     }
     changed_mappings = [
@@ -352,7 +360,7 @@ def _prepare_submission_payload(
         group["title_embedding"] = vector
     for mapping, vector in zip(changed_mappings, vectors[split:]):
         mapping["member_embedding"] = vector
-    return payload, embedding_failed
+    return payload, embedding_failed, materialized
 
 
 def submit_prepared_review(
@@ -446,7 +454,7 @@ def submit_review_authorized(
     ensure_submission_identity(prepared)
     warning = None
     try:
-        payload, embedding_failed = _prepare_submission_payload(
+        payload, embedding_failed, materialized_board = _prepare_submission_payload(
             prepared.board,
             prepared.original_mappings,
             embedder,
@@ -464,8 +472,9 @@ def submit_review_authorized(
         return SubmissionOutcome(False, error="Submission failed. Your review was kept; retry safely.")
 
     try:
-        _validate_resolved_group_ids(prepared.board, payload, resolved)
+        _validate_resolved_group_ids(materialized_board, payload, resolved)
         candidate = deepcopy(prepared)
+        candidate.board = materialized_board
         _apply_resolved_group_ids(candidate, resolved)
         _refresh_original_mappings(candidate)
         result = aggregate_by_group(candidate.rows, candidate.board)

@@ -3,14 +3,21 @@ import pytest
 
 from company_names.matching import Candidate
 from company_names.models import Group, NameRecord, ReviewBoard
-from company_names.repository import ExactMapping, GroupRecord
+from company_names.repository import (
+    ExactMapping,
+    GroupRecord,
+    RepositoryUnavailableError,
+)
+from company_names.review import singleton_group_id
 from company_names.service import (
+    PreparedReview,
     ServiceValidationError,
     collate_extracted_rows,
     normalize_extracted_rows,
     prepare_review,
     submit_prepared_review,
     submit_review,
+    submit_review_authorized,
 )
 
 
@@ -286,3 +293,91 @@ def test_submit_embeds_only_changed_titles_and_members_in_one_batch_and_reuses_i
     assert "member_embedding" not in payload.mappings[0]
     assert payload.mappings[1]["member_embedding"][0] == 3.0
     assert resolved == {"temp": "11111111-1111-4111-8111-111111111111"}
+
+
+def test_submit_embeds_materialized_singleton_title_and_member() -> None:
+    review = ReviewBoard(
+        groups={},
+        names={"Alpha": NameRecord("Alpha", None, "unknown", selected=False)},
+    )
+    repo = FakeRepository()
+    embedder = FakeEmbedder()
+
+    submit_review(
+        review,
+        {},
+        repo,
+        embedder,
+        request_id="22222222-2222-4222-8222-222222222222",
+        known_group_titles={},
+    )
+
+    assert embedder.calls == [["Alpha", "Alpha"]]
+    payload = repo.submissions[0]
+    assert len(payload.groups[0]["title_embedding"]) == 384
+    assert len(payload.mappings[0]["member_embedding"]) == 384
+
+
+def _separate_alpha_review() -> PreparedReview:
+    review = ReviewBoard(
+        groups={},
+        names={"Alpha": NameRecord("Alpha", None, "unknown", selected=False)},
+    )
+    return PreparedReview(
+        review,
+        {},
+        {},
+        pd.DataFrame([{"cleaned_name": "Alpha", "rns": 2.0, "revenue": 8.0}]),
+        [],
+        "11111111-1111-4111-8111-111111111111",
+    )
+
+
+def test_authorized_success_reconciles_materialized_singleton_everywhere() -> None:
+    prepared = _separate_alpha_review()
+    temporary_id = singleton_group_id("Alpha")
+    resolved_id = "22222222-2222-4222-8222-222222222222"
+    repo = FakeRepository()
+    repo.submit = lambda payload: (
+        repo.submissions.append(payload) or {temporary_id: resolved_id}
+    )
+
+    outcome = submit_review_authorized(prepared, repo, FakeEmbedder(), "pw", "pw")
+
+    assert outcome.success
+    assert set(prepared.board.groups) == {resolved_id}
+    assert prepared.board.names["Alpha"].group_id == resolved_id
+    assert prepared.board.names["Alpha"].selected is True
+    assert prepared.board.names["Alpha"].persisted_name == "Alpha"
+    assert prepared.original_mappings == {"Alpha": resolved_id}
+
+
+@pytest.mark.parametrize(
+    "response",
+    [RepositoryUnavailableError("lost"), {}],
+)
+def test_authorized_singleton_failure_preserves_visible_state_and_request(
+    response,
+) -> None:
+    prepared = _separate_alpha_review()
+    original_board = prepared.board
+    request_id = prepared.pending_request_id
+    repo = FakeRepository()
+
+    def submit(payload):
+        repo.submissions.append(payload)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    repo.submit = submit
+
+    outcome = submit_review_authorized(prepared, repo, FakeEmbedder(), "pw", "pw")
+
+    assert not outcome.success
+    assert prepared.board is original_board
+    assert prepared.board.groups == {}
+    assert prepared.board.names["Alpha"].selected is False
+    assert prepared.board.names["Alpha"].group_id is None
+    assert prepared.original_mappings == {}
+    assert prepared.pending_request_id == request_id

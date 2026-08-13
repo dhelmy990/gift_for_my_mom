@@ -184,6 +184,17 @@ def build_submission(
         raise ValueError("\n".join(errors))
 
     materialized = materialize_singletons(board, original_mappings)
+    return _build_submission_from_materialized(
+        materialized, original_mappings, request_id=request_id
+    )
+
+
+def _build_submission_from_materialized(
+    materialized: ReviewBoard,
+    original_mappings: dict[str, str],
+    request_id: str | None = None,
+) -> SubmissionPayload:
+    """Build a payload from a previously materialized, independent board."""
     errors = validate_board(materialized)
     if errors:
         raise ValueError("\n".join(errors))
@@ -233,14 +244,18 @@ def aggregate_by_group(rows: pd.DataFrame, board: ReviewBoard) -> pd.DataFrame:
                 )
             )
         )
-    included = {
-        cleaned_name: board.groups[record.group_id].canonical_title
-        for cleaned_name, record in board.names.items()
-        if record.selected
-        and not record.excluded
-        and record.group_id is not None
-        and record.group_id in board.groups
-    }
+    included: dict[str, str] = {}
+    for cleaned_name, record in board.names.items():
+        if record.excluded:
+            continue
+        if (
+            record.selected
+            and record.group_id is not None
+            and record.group_id in board.groups
+        ):
+            included[cleaned_name] = board.groups[record.group_id].canonical_title
+        elif not record.selected and record.group_id is None:
+            included[cleaned_name] = cleaned_name
     selected_rows = rows[rows["cleaned_name"].isin(included)].copy()
     selected_rows["TRAVEL AGENT"] = selected_rows["cleaned_name"].map(included)
     result = (

@@ -684,6 +684,11 @@ def test_aggregate_included_aliases_by_canonical_group_and_sort_by_revenue() -> 
 
     expected = pd.DataFrame(
         [
+            {
+                "TRAVEL AGENT": "Inventory",
+                "Sum of RNS": 50.0,
+                "Sum of R REVENUE": 500.0,
+            },
             {"TRAVEL AGENT": "DNATA", "Sum of RNS": 5.5, "Sum of R REVENUE": 260.0},
             {"TRAVEL AGENT": "Other", "Sum of RNS": 1.5, "Sum of R REVENUE": 20.5},
         ]
@@ -712,3 +717,19 @@ def test_aggregate_integer_inputs_produce_floating_totals() -> None:
     assert result.loc[0, "Sum of R REVENUE"] == 250.0
     assert pd.api.types.is_float_dtype(result["Sum of RNS"])
     assert pd.api.types.is_float_dtype(result["Sum of R REVENUE"])
+
+
+def test_aggregate_includes_separate_company_under_its_cleaned_name() -> None:
+    review = board(
+        groups=[],
+        names=[NameRecord("Alpha", None, "unknown", selected=False)],
+    )
+    rows = pd.DataFrame(
+        [{"cleaned_name": "Alpha", "rns": 2.0, "revenue": 8.0}]
+    )
+
+    result = aggregate_by_group(rows, review)
+
+    assert result.to_dict("records") == [
+        {"TRAVEL AGENT": "Alpha", "Sum of RNS": 2.0, "Sum of R REVENUE": 8.0}
+    ]
