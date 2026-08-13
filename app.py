@@ -82,6 +82,8 @@ def _extract_collation(uploaded_files, excluded_agents: list[str]) -> list[pd.Da
         if issue_count:
             st.warning(f"{uploaded_file.name}: skipped {issue_count} malformed data block(s).")
         if frame is not None and not frame.empty:
+            frame = frame.copy()
+            frame["_source_file"] = uploaded_file.name
             frames.append(frame)
         else:
             st.warning(f"Could not extract data from {uploaded_file.name}")

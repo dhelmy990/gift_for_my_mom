@@ -96,6 +96,26 @@ def test_normalize_rejects_invalid_numeric_values(value):
         normalize_extracted_rows(rows)
 
 
+def test_normalize_identifies_source_and_value_for_suffix_only_company_name():
+    rows = pd.DataFrame(
+        {
+            "TRAVEL AGENT": ["Pte Ltd"],
+            "Sum of RNS": [2],
+            "Sum of R REVENUE": [10],
+            "_source_file": ["hotel-report.pdf"],
+        }
+    )
+
+    with pytest.raises(ServiceValidationError) as caught:
+        normalize_extracted_rows(rows)
+
+    message = str(caught.value)
+    assert "Row 1" in message
+    assert "hotel-report.pdf" in message
+    assert "Pte Ltd" in message
+    assert "empty after cleanup" in message
+
+
 def test_prepare_places_exact_names_and_leaves_unknown_suggestions_in_tray():
     repo = FakeRepository(
         exact={"Acme": ExactMapping("g1", "Acme Group", "Acme", None)},

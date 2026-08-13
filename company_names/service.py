@@ -139,13 +139,21 @@ def normalize_extracted_rows(rows: pd.DataFrame) -> pd.DataFrame:
     normalized: list[dict[str, object]] = []
     for row_number, (_, row) in enumerate(rows.iterrows(), start=1):
         raw_name = row[name_column]
+        source = row.get("_source_file")
+        location = f"Row {row_number}"
+        if isinstance(source, str) and source.strip():
+            location += f" in {source.strip()}"
         if not isinstance(raw_name, str):
-            raise ServiceValidationError(f"Row {row_number} has an invalid company name")
+            raise ServiceValidationError(
+                f"{location} has an invalid company name: expected text, "
+                f"got {type(raw_name).__name__}"
+            )
         try:
             cleaned_name = clean_company_name(raw_name)
-        except ValueError:
+        except ValueError as error:
+            preview = raw_name.strip().replace("\n", " ")[:120]
             raise ServiceValidationError(
-                f"Row {row_number} has an invalid company name"
+                f"{location} has an invalid company name {preview!r}: {error}"
             ) from None
         try:
             rns = float(row[rns_column])
