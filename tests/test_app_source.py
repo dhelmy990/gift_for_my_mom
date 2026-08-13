@@ -10,3 +10,11 @@ def test_app_has_no_debug_print_and_parses():
     assert "print(" not in source
     assert "render_name_review" in source
     assert "prepare_review" in source
+
+
+def test_app_surfaces_sanitized_repository_operation_for_diagnostics():
+    source = Path("app.py").read_text()
+
+    assert "except RepositoryUnavailableError as exc:" in source
+    assert "st.error(f\"Database request failed: {exc}\")" in source
+    assert "logger.warning(\"Supabase preparation failed: %s\", exc)" in source

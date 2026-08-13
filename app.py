@@ -2,12 +2,13 @@
 
 import os
 import tempfile
+import logging
 
 import pandas as pd
 import streamlit as st
 
 from company_names.matching import FastEmbeddingProvider
-from company_names.repository import SupabaseMappingRepository
+from company_names.repository import RepositoryUnavailableError, SupabaseMappingRepository
 from company_names.review_session import (
     reconcile_final_results,
     compute_upload_fingerprint as identify_uploads,
@@ -31,6 +32,8 @@ DEFAULT_EXCLUDED_AGENTS = [
     "BOOKING.COM (VCC )", "RTXRakuten Tower", "TIKET10230",
     "Booking.com ( Pax Account", "Expedia.com",
 ]
+
+logger = logging.getLogger(__name__)
 
 
 @st.cache_resource
@@ -130,6 +133,11 @@ def _prepare_collation_review(frames: list[pd.DataFrame], upload_fingerprint: st
         prepared = prepare_review(pd.concat(frames, ignore_index=True), repository, embedder)
     except ServiceValidationError:
         raise
+    except RepositoryUnavailableError as exc:
+        st.session_state.pop("prepared_name_review", None)
+        logger.warning("Supabase preparation failed: %s", exc)
+        st.error(f"Database request failed: {exc}")
+        return
     except Exception:
         st.session_state.pop("prepared_name_review", None)
         st.error("Database connection unavailable. Check the Supabase configuration and tables, then retry.")
