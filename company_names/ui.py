@@ -12,7 +12,12 @@ import pandas as pd
 
 from .models import Group, ReviewBoard
 from .review import validate_board
-from .service import PreparedReview
+from .service import (
+    PreparedReview,
+    export_backup_csv,
+    password_matches,
+    submit_review_authorized,
+)
 
 
 WORKING = "working"
@@ -338,11 +343,28 @@ def _add_from_search(board: ReviewBoard, widget_key: str) -> None:
     st.session_state[widget_key] = []
 
 
-def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.DataFrame | None:
-    """Render the searchable board. Persistence is intentionally deferred to Task 8."""
+def _unlock_admin(expected_password: str | None, password_key: str) -> None:
+    """Consume the candidate password and retain only the authorization decision."""
     import streamlit as st
 
-    del repository, embedder
+    candidate = st.session_state.pop(password_key, None)
+    if password_matches(candidate, expected_password):
+        st.session_state["mapping_admin_unlocked"] = True
+        st.session_state.pop("mapping_admin_auth_error", None)
+    else:
+        st.session_state["mapping_admin_unlocked"] = False
+        st.session_state["mapping_admin_auth_error"] = "Incorrect admin password."
+
+
+def render_name_review(
+    prepared: PreparedReview,
+    repository,
+    embedder,
+    admin_password: str | None = None,
+) -> pd.DataFrame | None:
+    """Render, authorize, and atomically persist the searchable review board."""
+    import streamlit as st
+
     board = prepared.board
     request_id = str(prepared.pending_request_id or id(prepared))
     init_key = review_widget_key(request_id, "initialized")
@@ -479,13 +501,58 @@ def render_name_review(prepared: PreparedReview, repository, embedder) -> pd.Dat
 
     errors = validate_board(board)
     if errors:
-        st.error("Review is not ready: " + " ".join(errors))
-    else:
-        st.success("Review ready. Final authorization and submission are added in the next step.")
-    st.button(
+        st.error("Review is not ready:\n\n" + "\n\n".join(f"- {error}" for error in errors))
+
+    unlocked = bool(st.session_state.get("mapping_admin_unlocked"))
+    if not admin_password:
+        st.error(
+            "Admin password is not configured. Add ADMIN_PASSWORD to Streamlit secrets; "
+            "submission and backup export are disabled."
+        )
+    elif not unlocked:
+        password_key = review_widget_key(request_id, "admin_password")
+        with st.form(review_widget_key(request_id, "admin_unlock")):
+            st.text_input("Admin password", type="password", key=password_key)
+            st.form_submit_button(
+                "Unlock permanent actions",
+                on_click=_unlock_admin,
+                args=(admin_password, password_key),
+            )
+        auth_error = st.session_state.pop("mapping_admin_auth_error", None)
+        if auth_error:
+            st.error(auth_error)
+
+    unlocked = bool(st.session_state.get("mapping_admin_unlocked"))
+    if unlocked and admin_password:
+        if st.button("Prepare mappings backup", key=review_widget_key(request_id, "backup")):
+            backup = export_backup_csv(repository, admin_password, admin_password)
+            if backup.error:
+                st.error(backup.error)
+            elif backup.data is not None:
+                st.download_button(
+                    "Download mappings backup",
+                    data=backup.data,
+                    file_name="company_name_mappings.csv",
+                    mime="text/csv; charset=utf-8",
+                    key=review_widget_key(request_id, "backup_download"),
+                )
+
+    clicked = st.button(
         "Submit final review",
         key=review_widget_key(request_id, "submit"),
-        disabled=True,
-        help="Authorization is added in Task 8",
+        disabled=bool(errors) or not unlocked or not bool(admin_password),
+        help="Resolve every included name and unlock permanent actions first.",
     )
+    if clicked:
+        outcome = submit_review_authorized(
+            prepared, repository, embedder, admin_password, admin_password
+        )
+        if outcome.warning:
+            st.warning(outcome.warning)
+        if outcome.error:
+            st.error(outcome.error)
+            return None
+        if outcome.result is not None:
+            st.success("Mappings saved.")
+            return outcome.result
     return None

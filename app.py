@@ -16,6 +16,7 @@ from company_names.review_session import (
 from company_names.service import (
     ServiceValidationError,
     prepare_review,
+    submission_fingerprint as board_revision,
 )
 from company_names.ui import render_name_review
 from plumber import extract_all_tables, extract_last_table_as_df, two_tablify
@@ -196,11 +197,24 @@ def main() -> None:
         service_key = _secret("SUPABASE_SERVICE_KEY")
         if url and service_key:
             st.success("Database connected.")
-            render_name_review(
+            result = render_name_review(
                 prepared,
                 get_mapping_repository(url, service_key),
                 get_embedding_provider(),
+                _secret("ADMIN_PASSWORD"),
             )
+            if result is not None:
+                st.session_state["final_results"] = result
+                st.session_state["final_results_fingerprint"] = board_revision(
+                    prepared.board
+                )
+            final_results = st.session_state.get("final_results")
+            result_is_current = st.session_state.get(
+                "final_results_fingerprint"
+            ) == board_revision(prepared.board)
+            if isinstance(final_results, pd.DataFrame) and result_is_current:
+                st.subheader("Final grouped totals")
+                st.dataframe(final_results, use_container_width=True)
 
 
 if __name__ == "__main__":

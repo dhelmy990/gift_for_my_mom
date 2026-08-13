@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import csv
+import hashlib
+import hmac
+import io
+import json
 import math
 from uuid import uuid4
 
@@ -10,9 +15,9 @@ import pandas as pd
 
 from .cleaning import clean_company_name
 from .matching import EMBEDDING_DIMENSION, EmbeddingProvider, Suggestion, rank_candidates
-from .models import Group, NameRecord, ReviewBoard
-from .repository import MappingRepository
-from .review import build_submission
+from .models import Group, NameRecord, ReviewBoard, SubmissionPayload
+from .repository import MappingRepository, RepositoryUnavailableError
+from .review import aggregate_by_group, build_submission, validate_board
 
 EMBEDDING_BATCH_SIZE = 128
 
@@ -29,6 +34,57 @@ class PreparedReview:
     rows: pd.DataFrame
     warnings: list[str]
     pending_request_id: str | None = None
+    submission_fingerprint: str | None = None
+    initial_group_titles: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class SubmissionOutcome:
+    success: bool
+    result: pd.DataFrame | None = None
+    error: str | None = None
+    warning: str | None = None
+
+
+@dataclass(frozen=True)
+class BackupOutcome:
+    data: bytes | None = None
+    error: str | None = None
+
+
+def password_matches(candidate: object, expected: object) -> bool:
+    """Compare configured admin credentials without retaining the candidate."""
+    if not isinstance(candidate, str) or not isinstance(expected, str):
+        return False
+    return hmac.compare_digest(candidate, expected)
+
+
+def submission_fingerprint(board: ReviewBoard) -> str:
+    value = {
+        "groups": sorted(
+            (group.id, group.canonical_title, group.existing)
+            for group in board.groups.values()
+        ),
+        "names": sorted(
+            (key, record.cleaned_name, record.group_id, record.selected, record.excluded)
+            for key, record in board.names.items()
+        ),
+    }
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def ensure_submission_identity(prepared: PreparedReview) -> str:
+    """Reuse an idempotency key only while its exact board payload is unchanged."""
+    fingerprint = submission_fingerprint(prepared.board)
+    if not prepared.pending_request_id or (
+        prepared.submission_fingerprint is not None
+        and prepared.submission_fingerprint != fingerprint
+    ):
+        prepared.pending_request_id = str(uuid4())
+    prepared.submission_fingerprint = fingerprint
+    return prepared.pending_request_id
 
 
 def normalize_extracted_rows(rows: pd.DataFrame) -> pd.DataFrame:
@@ -152,10 +208,13 @@ def prepare_review(
                 name, None, "suggested" if suggestions[name] else "unknown", selected=True
             )
 
-    return PreparedReview(
+    prepared = PreparedReview(
         ReviewBoard(groups, records), original_mappings, suggestions,
         normalized_rows, warnings, str(uuid4()),
+        initial_group_titles={group_id: group.canonical_title for group_id, group in groups.items()},
     )
+    prepared.submission_fingerprint = submission_fingerprint(prepared.board)
+    return prepared
 
 
 def _embed_batched(embedder: EmbeddingProvider, texts: list[str]) -> list[list[float]]:
@@ -178,20 +237,42 @@ def submit_review(
     repository: MappingRepository,
     embedder: EmbeddingProvider,
     request_id: str | None = None,
+    known_group_titles: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Embed changed data and persist one atomic review payload."""
     if request_id is None:
         raise ServiceValidationError(
             "A stable request_id is required; use submit_prepared_review for prepared state"
         )
+    if known_group_titles is None:
+        known_group_titles = {
+            group.id: group.canonical_title for group in repository.list_groups()
+        }
+    payload, _ = _prepare_submission_payload(
+        board,
+        original_mappings,
+        embedder,
+        request_id,
+        known_group_titles,
+    )
+    return repository.submit(payload)
+
+
+def _prepare_submission_payload(
+    board: ReviewBoard,
+    original_mappings: dict[str, str],
+    embedder: EmbeddingProvider,
+    request_id: str,
+    known_group_titles: dict[str, str] | None,
+) -> tuple[SubmissionPayload, bool]:
+    """Build one payload, falling back cleanly when optional embeddings fail."""
     payload = build_submission(board, original_mappings, request_id=request_id)
-    persisted_groups = {group.id: group for group in repository.list_groups()}
-    changed_groups = [
-        group for group in payload.groups
-        if not group["existing"]
+    persisted_groups = known_group_titles or {}
+    changed_groups = [group for group in payload.groups if (
+        not group["existing"]
         or group["id"] not in persisted_groups
-        or persisted_groups[group["id"]].canonical_title != group["canonical_title"]
-    ]
+        or persisted_groups[group["id"]] != group["canonical_title"]
+    )]
     changed_mappings = [
         mapping for mapping in payload.mappings
         if original_mappings.get(mapping["cleaned_name"]) != mapping["group_id"]
@@ -199,13 +280,18 @@ def submit_review(
     texts = [str(group["canonical_title"]) for group in changed_groups] + [
         str(mapping["cleaned_name"]) for mapping in changed_mappings
     ]
-    vectors = _embed_batched(embedder, texts) if texts else []
+    embedding_failed = False
+    try:
+        vectors = _embed_batched(embedder, texts) if texts else []
+    except Exception:
+        vectors = []
+        embedding_failed = bool(texts)
     split = len(changed_groups)
     for group, vector in zip(changed_groups, vectors[:split]):
         group["title_embedding"] = vector
     for mapping, vector in zip(changed_mappings, vectors[split:]):
         mapping["member_embedding"] = vector
-    return repository.submit(payload)
+    return payload, embedding_failed
 
 
 def submit_prepared_review(
@@ -222,4 +308,107 @@ def submit_prepared_review(
         repository,
         embedder,
         request_id=prepared.pending_request_id,
+        known_group_titles=prepared.initial_group_titles or {},
     )
+
+
+def _apply_resolved_group_ids(prepared: PreparedReview, resolved: dict[str, str]) -> None:
+    """Replace temporary group IDs after a committed response, preserving all state."""
+    for temporary_id, persisted_id in resolved.items():
+        group = prepared.board.groups.get(temporary_id)
+        existing = prepared.board.groups.get(persisted_id)
+        if group is not None and temporary_id != persisted_id and existing is not None and existing is not group:
+            raise ValueError(f"Resolved group {persisted_id} conflicts with an existing group")
+    for temporary_id, persisted_id in resolved.items():
+        group = prepared.board.groups.get(temporary_id)
+        if group is None or temporary_id == persisted_id:
+            continue
+        del prepared.board.groups[temporary_id]
+        group.id = persisted_id
+        group.existing = True
+        prepared.board.groups[persisted_id] = group
+        for record in prepared.board.names.values():
+            if record.group_id == temporary_id:
+                record.group_id = persisted_id
+
+
+def _refresh_original_mappings(prepared: PreparedReview) -> None:
+    for name, record in prepared.board.names.items():
+        if not record.selected:
+            prepared.original_mappings.pop(name, None)
+        elif not record.excluded and record.group_id is not None:
+            prepared.original_mappings[name] = record.group_id
+
+
+def submit_review_authorized(
+    prepared: PreparedReview,
+    repository: MappingRepository,
+    embedder: EmbeddingProvider,
+    candidate_password: object,
+    expected_password: object,
+) -> SubmissionOutcome:
+    """Authorize, validate, atomically submit, and finalize a prepared review."""
+    if not isinstance(expected_password, str) or not expected_password:
+        return SubmissionOutcome(False, error="Admin password is not configured; permanent actions are disabled.")
+    if not password_matches(candidate_password, expected_password):
+        return SubmissionOutcome(False, error="Authorization failed.")
+    errors = validate_board(prepared.board)
+    if errors:
+        return SubmissionOutcome(False, error="\n".join(errors))
+
+    ensure_submission_identity(prepared)
+    warning = None
+    try:
+        payload, embedding_failed = _prepare_submission_payload(
+            prepared.board,
+            prepared.original_mappings,
+            embedder,
+            prepared.pending_request_id,
+            prepared.initial_group_titles or {},
+        )
+        if embedding_failed:
+            warning = "Embeddings were unavailable; mappings were saved without vectors."
+        resolved = repository.submit(payload)
+    except RepositoryUnavailableError:
+        return SubmissionOutcome(False, error="Database submission unavailable. Your review was kept; retry safely.")
+    except ValueError as exc:
+        return SubmissionOutcome(False, error=str(exc))
+    except Exception:
+        return SubmissionOutcome(False, error="Submission failed. Your review was kept; retry safely.")
+
+    try:
+        _apply_resolved_group_ids(prepared, resolved)
+        _refresh_original_mappings(prepared)
+        result = aggregate_by_group(prepared.rows, prepared.board)
+    except ValueError as exc:
+        return SubmissionOutcome(False, error=str(exc))
+    prepared.pending_request_id = str(uuid4())
+    prepared.submission_fingerprint = submission_fingerprint(prepared.board)
+    prepared.initial_group_titles = {
+        group_id: group.canonical_title for group_id, group in prepared.board.groups.items()
+    }
+    return SubmissionOutcome(True, result=result, warning=warning)
+
+
+def export_backup_csv(
+    repository: MappingRepository,
+    candidate_password: object,
+    expected_password: object,
+) -> BackupOutcome:
+    """Return an authorized, stable UTF-8 mapping backup with no vector data."""
+    if not isinstance(expected_password, str) or not expected_password:
+        return BackupOutcome(error="Admin password is not configured; permanent actions are disabled.")
+    if not password_matches(candidate_password, expected_password):
+        return BackupOutcome(error="Authorization failed.")
+    try:
+        rows = sorted(
+            repository.export_rows(),
+            key=lambda row: (row.cleaned_name, row.canonical_title),
+        )
+    except Exception:
+        return BackupOutcome(error="Database export unavailable. Please retry.")
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["cleaned_name", "canonical_title"])
+    writer.writerows((row.cleaned_name, row.canonical_title) for row in rows)
+    return BackupOutcome(data=output.getvalue().encode("utf-8"))

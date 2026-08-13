@@ -44,6 +44,7 @@ def test_reconciliation_hides_and_clears_stale_review_state():
         "prepared_name_review": object(),
         "prepared_name_review_fingerprint": "old",
         "final_results": object(),
+        "final_results_fingerprint": "old-board",
         "name_review:old-request:group_title:g": "stale",
         "unrelated": "keep",
     }

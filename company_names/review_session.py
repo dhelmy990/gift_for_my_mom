@@ -69,6 +69,7 @@ def reconcile_prepared_review(
             "prepared_name_review",
             "prepared_name_review_fingerprint",
             "final_results",
+            "final_results_fingerprint",
         } or key.startswith(("name_review:", "name_search_", "name_board_", "group_title_")):
             state.pop(key, None)
     return None
