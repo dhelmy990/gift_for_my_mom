@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
 from company_names.review_session import (
+    clear_final_results,
     compute_upload_fingerprint,
     merge_custom_excluded_agent,
+    reconcile_final_results,
     reconcile_prepared_review,
 )
 
@@ -70,3 +72,41 @@ def test_custom_excluded_agent_persists_as_option_and_selection():
     assert options == ["Default", "My Agent"]
     assert selected == ["Default", "My Agent"]
     assert merge_custom_excluded_agent(options, selected, " My Agent ") == (options, selected)
+
+
+def test_final_results_survive_unchanged_passive_rerun():
+    result = object()
+    state = {
+        "final_results": result,
+        "final_results_review_fingerprint": "upload-a",
+        "final_results_mutation_fingerprint": "board-a",
+    }
+
+    assert reconcile_final_results(state, "upload-a", "board-a") is result
+    assert state["final_results"] is result
+
+
+def test_mutated_results_are_cleared_and_do_not_reappear_after_revert():
+    result = object()
+    state = {
+        "final_results": result,
+        "final_results_review_fingerprint": "upload-a",
+        "final_results_mutation_fingerprint": "board-a",
+    }
+
+    assert reconcile_final_results(state, "upload-a", "board-b") is None
+    assert reconcile_final_results(state, "upload-a", "board-a") is None
+    assert "final_results" not in state
+
+
+def test_clear_final_results_removes_result_and_all_binding_metadata():
+    state = {
+        "final_results": object(),
+        "final_results_review_fingerprint": "upload-a",
+        "final_results_mutation_fingerprint": "board-a",
+        "unrelated": "keep",
+    }
+
+    clear_final_results(state)
+
+    assert state == {"unrelated": "keep"}

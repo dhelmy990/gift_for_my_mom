@@ -9,6 +9,7 @@ import streamlit as st
 from company_names.matching import FastEmbeddingProvider
 from company_names.repository import SupabaseMappingRepository
 from company_names.review_session import (
+    reconcile_final_results,
     compute_upload_fingerprint as identify_uploads,
     merge_custom_excluded_agent,
     reconcile_prepared_review,
@@ -197,6 +198,11 @@ def main() -> None:
         service_key = _secret("SUPABASE_SERVICE_KEY")
         if url and service_key:
             st.success("Database connected.")
+            reconcile_final_results(
+                st.session_state,
+                upload_fingerprint,
+                board_revision(prepared.board),
+            )
             result = render_name_review(
                 prepared,
                 get_mapping_repository(url, service_key),
@@ -205,14 +211,16 @@ def main() -> None:
             )
             if result is not None:
                 st.session_state["final_results"] = result
-                st.session_state["final_results_fingerprint"] = board_revision(
+                st.session_state["final_results_review_fingerprint"] = upload_fingerprint
+                st.session_state["final_results_mutation_fingerprint"] = board_revision(
                     prepared.board
                 )
-            final_results = st.session_state.get("final_results")
-            result_is_current = st.session_state.get(
-                "final_results_fingerprint"
-            ) == board_revision(prepared.board)
-            if isinstance(final_results, pd.DataFrame) and result_is_current:
+            final_results = reconcile_final_results(
+                st.session_state,
+                upload_fingerprint,
+                board_revision(prepared.board),
+            )
+            if isinstance(final_results, pd.DataFrame):
                 st.subheader("Final grouped totals")
                 st.dataframe(final_results, use_container_width=True)
 

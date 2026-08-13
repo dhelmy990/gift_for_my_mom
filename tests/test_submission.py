@@ -2,6 +2,7 @@ import pandas as pd
 
 from company_names.models import Group, NameRecord, ReviewBoard
 from company_names.repository import ExportRow, RepositoryUnavailableError
+from company_names.review_session import clear_final_results
 from company_names.service import (
     PreparedReview,
     ensure_submission_identity,
@@ -115,6 +116,23 @@ def test_failure_preserves_board_result_and_request_id_for_unchanged_retry():
     assert prepared.board.names["Acme"].group_id == before
     assert [payload.request_id for payload in repo.submissions] == [request_id, request_id]
     assert retried.success
+
+
+def test_failed_resubmission_does_not_leave_prior_final_results():
+    state = {
+        "final_results": pd.DataFrame([{"TRAVEL AGENT": "Old"}]),
+        "final_results_review_fingerprint": "upload",
+        "final_results_mutation_fingerprint": "old-board",
+    }
+    repo = Repository([RepositoryUnavailableError("lost")])
+
+    clear_final_results(state)
+    outcome = submit_review_authorized(
+        prepared_review(), repo, Embedder(), "pw", "pw"
+    )
+
+    assert not outcome.success
+    assert "final_results" not in state
 
 
 def test_changed_board_after_failure_gets_new_request_id():

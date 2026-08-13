@@ -12,6 +12,7 @@ import pandas as pd
 
 from .models import Group, ReviewBoard
 from .review import validate_board
+from .review_session import clear_final_results
 from .service import (
     PreparedReview,
     export_backup_csv,
@@ -544,6 +545,9 @@ def render_name_review(
         help="Resolve every included name and unlock permanent actions first.",
     )
     if clicked:
+        # A retry is a new display attempt even when its database request ID is
+        # intentionally reused. Never leave prior totals visible if it fails.
+        clear_final_results(st.session_state)
         outcome = submit_review_authorized(
             prepared, repository, embedder, admin_password, admin_password
         )

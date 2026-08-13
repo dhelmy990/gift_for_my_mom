@@ -8,6 +8,40 @@ from collections.abc import MutableMapping, Sequence
 from typing import Any
 
 
+FINAL_RESULT_KEYS = {
+    "final_results",
+    "final_results_fingerprint",
+    "final_results_review_fingerprint",
+    "final_results_mutation_fingerprint",
+}
+
+
+def clear_final_results(state: MutableMapping[str, Any]) -> None:
+    """Remove grouped totals and every identity value that could revive them."""
+    for key in FINAL_RESULT_KEYS:
+        state.pop(key, None)
+
+
+def reconcile_final_results(
+    state: MutableMapping[str, Any],
+    current_review_fingerprint: str,
+    current_mutation_fingerprint: str,
+) -> object | None:
+    """Keep results only while both their review and exact board state match."""
+    result = state.get("final_results")
+    matches = (
+        result is not None
+        and state.get("final_results_review_fingerprint")
+        == current_review_fingerprint
+        and state.get("final_results_mutation_fingerprint")
+        == current_mutation_fingerprint
+    )
+    if not matches:
+        clear_final_results(state)
+        return None
+    return result
+
+
 def _value(upload: object, field: str) -> object | None:
     if isinstance(upload, dict):
         return upload.get(field)
@@ -68,8 +102,7 @@ def reconcile_prepared_review(
         if key in {
             "prepared_name_review",
             "prepared_name_review_fingerprint",
-            "final_results",
-            "final_results_fingerprint",
+            *FINAL_RESULT_KEYS,
         } or key.startswith(("name_review:", "name_search_", "name_board_", "group_title_")):
             state.pop(key, None)
     return None
