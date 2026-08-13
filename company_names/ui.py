@@ -321,26 +321,36 @@ def _tray_names(board: ReviewBoard) -> list[str]:
 
 def group_creation_error(board: ReviewBoard, title: str) -> str | None:
     """Return the first actionable error for creating a combined group."""
+    return group_creation_resolution(board, title)[0]
+
+
+def group_creation_resolution(
+    board: ReviewBoard, title: str
+) -> tuple[str | None, Group | None]:
+    """Resolve creation validation and a unique existing-title destination once."""
     trimmed_title = title.strip()
     if not trimmed_title:
-        return "Enter the final company name."
+        return "Enter the final company name.", None
     if len(_tray_names(board)) < 2:
-        return "Add at least two names to the working tray."
+        return "Add at least two names to the working tray.", None
     try:
         normalize_lookup_key(trimmed_title)
     except ValueError:
-        return "Enter a usable final company name."
+        return "Enter a usable final company name.", None
 
     try:
         matching_group = matching_group_for_title(board, trimmed_title)
     except ValueError:
-        return "More than one existing group uses that final company name."
+        return "More than one existing group uses that final company name.", None
     if matching_group is not None:
         return (
-            f"A group named ‘{matching_group.canonical_title}’ already exists. "
-            "Move these names into that group instead."
+            (
+                f"A group named ‘{matching_group.canonical_title}’ already exists. "
+                "Move these names into that group instead."
+            ),
+            matching_group,
         )
-    return None
+    return None, None
 
 
 def _normalized_group_title(title: str) -> str | None:
@@ -749,15 +759,9 @@ def render_name_review(
         placeholder="Type the name this combined group should use",
         key=title_key,
     )
-    creation_error = group_creation_error(board, new_title)
+    creation_error, matching_group = group_creation_resolution(board, new_title)
     if creation_error:
         st.caption(creation_error)
-    matching_group = None
-    if new_title and creation_error:
-        try:
-            matching_group = matching_group_for_title(board, new_title)
-        except ValueError:
-            st.error("More than one existing group uses that name. Correct the group titles first.")
     if matching_group is not None and len(_tray_names(board)) >= 2:
         st.button(
             f"Move tray names to {matching_group.canonical_title}",

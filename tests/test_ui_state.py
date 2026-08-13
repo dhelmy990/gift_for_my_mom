@@ -29,6 +29,7 @@ from company_names.ui import (
     create_group,
     create_combined_group,
     group_creation_error,
+    group_creation_resolution,
     group_title_errors,
     matching_group_for_title,
     move_to_tray,
@@ -158,6 +159,25 @@ def test_group_creation_error_requires_two_tray_names_before_normalizing_title()
     state = board()
 
     assert group_creation_error(state, "Ltd.") == "Add at least two names to the working tray."
+
+
+def test_group_creation_resolution_never_matches_unusable_title_with_two_tray_names():
+    state = board()
+    move_to_tray(state, ["Beta", "Gamma"])
+
+    assert group_creation_resolution(state, "Ltd.") == (
+        "Enter a usable final company name.",
+        None,
+    )
+
+
+def test_group_creation_resolution_prioritizes_tray_count_over_unusable_title():
+    state = board()
+
+    assert group_creation_resolution(state, "Ltd.") == (
+        "Add at least two names to the working tray.",
+        None,
+    )
 
 
 def test_group_creation_error_reports_ambiguous_normalized_title_conflict():
