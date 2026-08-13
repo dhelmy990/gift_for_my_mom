@@ -34,7 +34,18 @@ def materialize_singletons(board: ReviewBoard) -> ReviewBoard:
         record = materialized.names[cleaned_name]
         if not record.selected and not record.excluded and record.group_id is None:
             group_id = singleton_group_id(cleaned_name)
-            materialized.groups[group_id] = Group(group_id, cleaned_name, False)
+            existing_group = materialized.groups.get(group_id)
+            if existing_group is None:
+                materialized.groups[group_id] = Group(group_id, cleaned_name, False)
+            elif (
+                existing_group.id != group_id
+                or existing_group.canonical_title != cleaned_name
+                or existing_group.existing
+            ):
+                raise ValueError(
+                    f"Cannot materialize singleton for {cleaned_name}: derived group ID "
+                    f"{group_id} conflicts with an existing group"
+                )
             record.selected = True
             record.group_id = group_id
     return materialized

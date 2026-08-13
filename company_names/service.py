@@ -19,7 +19,7 @@ from .csv_safety import csv_safe_cell
 from .matching import EMBEDDING_DIMENSION, EmbeddingProvider, Suggestion, rank_candidates
 from .models import Group, NameRecord, ReviewBoard, SubmissionPayload
 from .repository import MappingRepository, RepositoryUnavailableError
-from .review import aggregate_by_group, build_submission, validate_board
+from .review import aggregate_by_group, build_submission, validate_submission
 
 EMBEDDING_BATCH_SIZE = 128
 
@@ -439,7 +439,7 @@ def submit_review_authorized(
         return SubmissionOutcome(False, error="Admin password is not configured; permanent actions are disabled.")
     if not password_matches(candidate_password, expected_password):
         return SubmissionOutcome(False, error="Authorization failed.")
-    errors = validate_board(prepared.board)
+    errors = validate_submission(prepared.board)
     if errors:
         return SubmissionOutcome(False, error="\n".join(errors))
 

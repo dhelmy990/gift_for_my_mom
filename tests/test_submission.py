@@ -81,7 +81,7 @@ def test_wrong_or_missing_password_prevents_repository_call():
         assert len(repo.submissions) == 0
 
 
-def test_authorized_invalid_board_returns_all_errors_without_repository_call():
+def test_authorized_working_tray_returns_actionable_error_without_repository_call():
     prepared = prepared_review(grouped=False)
     prepared.board.groups["blank"] = Group("blank", "", False)
     prepared.board.names["Other"] = NameRecord("Other", None, "unknown", selected=True)
@@ -90,8 +90,10 @@ def test_authorized_invalid_board_returns_all_errors_without_repository_call():
     outcome = submit_review_authorized(prepared, repo, Embedder(), "pw", "pw")
 
     assert not outcome.success
-    assert "Acme is included but ungrouped" in outcome.error
-    assert "Other is included but ungrouped" in outcome.error
+    assert outcome.error == (
+        "Resolve 2 names in the working tray: create a combined group or "
+        "return them to Separate companies."
+    )
     assert repo.submissions == []
 
 

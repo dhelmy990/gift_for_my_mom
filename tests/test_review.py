@@ -87,6 +87,27 @@ def test_materialize_singletons_leaves_grouped_and_excluded_names_unchanged() ->
     assert materialized.names["Exact Alias"] is not review.names["Exact Alias"]
 
 
+def test_materialize_singletons_rejects_a_conflicting_derived_group_id() -> None:
+    singleton_id = singleton_group_id("Alpha Travel")
+    review = board(
+        groups=[Group(singleton_id, "Different Company", False)],
+        names=[NameRecord("Alpha Travel", None, "unknown")],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Cannot materialize singleton for Alpha Travel: derived group ID .* "
+            "conflicts with an existing group"
+        ),
+    ):
+        materialize_singletons(review)
+
+    assert review.groups[singleton_id].canonical_title == "Different Company"
+    assert review.names["Alpha Travel"].selected is False
+    assert review.names["Alpha Travel"].group_id is None
+
+
 @pytest.mark.parametrize(
     ("names", "expected"),
     [
