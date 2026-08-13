@@ -57,15 +57,18 @@ returns boolean language sql immutable
 security invoker
 set search_path = pg_catalog, public
 as $$
-  select value is null or value = 'null'::jsonb or (
-    jsonb_typeof(value) = 'array'
-    and jsonb_array_length(value) = 384
-    and not exists (
+  select case
+    when value is null or value = 'null'::jsonb then true
+    when jsonb_typeof(value) <> 'array' then false
+    when jsonb_array_length(value) <> 384 then false
+    else not exists (
       select 1 from jsonb_array_elements(value) item
-      where jsonb_typeof(item) <> 'number'
-         or abs((item #>> '{}')::numeric) > 3.402823466e38
+      where case
+        when jsonb_typeof(item) <> 'number' then true
+        else abs((item #>> '{}')::numeric) > 3.402823466e38
+      end
     )
-  );
+  end;
 $$;
 
 create or replace function public.review_lookup_key(name text)
@@ -106,6 +109,12 @@ begin
   if payload is null or jsonb_typeof(payload) <> 'object' then
     raise exception using errcode = '22023', message = 'review payload must be an object';
   end if;
+  if exists (
+    select 1 from jsonb_object_keys(payload) field_name
+    where field_name not in ('groups', 'mappings', 'unmap_names')
+  ) then
+    raise exception using errcode = '22023', message = 'unknown review payload field';
+  end if;
   if not (payload ? 'groups') or not (payload ? 'mappings') or not (payload ? 'unmap_names') then
     raise exception using errcode = '22023', message = 'review payload arrays are required';
   end if;
@@ -137,6 +146,70 @@ begin
     raw jsonb not null,
     cleaned_name text
   ) on commit drop;
+
+  if exists (
+    select 1 from jsonb_array_elements(groups_value) group_value
+    where jsonb_typeof(group_value) <> 'object'
+  ) then
+    raise exception using errcode = '22023', message = 'invalid group';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(groups_value) group_value
+    where not (group_value ? 'id')
+       or jsonb_typeof(group_value->'id') <> 'string'
+       or not (group_value ? 'canonical_title')
+       or jsonb_typeof(group_value->'canonical_title') <> 'string'
+       or not (group_value ? 'existing')
+       or jsonb_typeof(group_value->'existing') <> 'boolean'
+       or (group_value ? 'canonical_key'
+           and jsonb_typeof(group_value->'canonical_key') <> 'string')
+       or (group_value ? 'title_embedding'
+           and not public.valid_review_embedding(group_value->'title_embedding'))
+  ) then
+    raise exception using errcode = '22023', message = 'invalid group';
+  end if;
+  if exists (
+    select 1
+    from jsonb_array_elements(groups_value) group_value,
+         lateral jsonb_object_keys(group_value) field_name
+    where field_name not in ('id', 'canonical_title', 'canonical_key', 'existing', 'title_embedding')
+  ) then
+    raise exception using errcode = '22023', message = 'unknown group field';
+  end if;
+
+  if exists (
+    select 1 from jsonb_array_elements(mappings_value) mapping_value
+    where jsonb_typeof(mapping_value) <> 'object'
+  ) then
+    raise exception using errcode = '22023', message = 'invalid mapping';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(mappings_value) mapping_value
+    where not (mapping_value ? 'cleaned_name')
+       or jsonb_typeof(mapping_value->'cleaned_name') <> 'string'
+       or not (mapping_value ? 'group_id')
+       or jsonb_typeof(mapping_value->'group_id') <> 'string'
+       or (mapping_value ? 'lookup_key'
+           and jsonb_typeof(mapping_value->'lookup_key') <> 'string')
+       or (mapping_value ? 'member_embedding'
+           and not public.valid_review_embedding(mapping_value->'member_embedding'))
+  ) then
+    raise exception using errcode = '22023', message = 'invalid mapping';
+  end if;
+  if exists (
+    select 1
+    from jsonb_array_elements(mappings_value) mapping_value,
+         lateral jsonb_object_keys(mapping_value) field_name
+    where field_name not in ('cleaned_name', 'lookup_key', 'group_id', 'member_embedding')
+  ) then
+    raise exception using errcode = '22023', message = 'unknown mapping field';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(unmaps_value) unmap_value
+    where jsonb_typeof(unmap_value) <> 'string'
+  ) then
+    raise exception using errcode = '22023', message = 'invalid unmap name';
+  end if;
 
   insert into _review_groups(raw, temp_id, canonical_title, canonical_key)
   select group_value,

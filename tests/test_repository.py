@@ -192,3 +192,50 @@ def test_review_rpc_stages_trimmed_identity_fields_before_checks_and_writes():
     assert "group by m->>'cleaned_name'" not in rpc
     assert "where n.cleaned_name = mapping_item->>'cleaned_name'" not in rpc
     assert "where cleaned_name = unmap_item #>> '{}'" not in rpc
+
+
+def test_review_rpc_validates_raw_json_field_types_before_staging():
+    sql = (Path(__file__).parents[1] / "supabase" / "schema.sql").read_text().lower()
+    rpc = sql.split("create or replace function public.submit_name_review(payload jsonb)", 1)[1]
+    rpc = rpc.split("revoke all on function public.set_updated_at()", 1)[0]
+    group_checks = (
+        "jsonb_typeof(group_value->'id') <> 'string'",
+        "jsonb_typeof(group_value->'canonical_title') <> 'string'",
+        "jsonb_typeof(group_value->'existing') <> 'boolean'",
+        "jsonb_typeof(group_value->'canonical_key') <> 'string'",
+        "not public.valid_review_embedding(group_value->'title_embedding')",
+    )
+    mapping_checks = (
+        "jsonb_typeof(mapping_value->'cleaned_name') <> 'string'",
+        "jsonb_typeof(mapping_value->'group_id') <> 'string'",
+        "jsonb_typeof(mapping_value->'lookup_key') <> 'string'",
+        "not public.valid_review_embedding(mapping_value->'member_embedding')",
+    )
+    for check in (*group_checks, *mapping_checks):
+        assert check in rpc
+    assert "not (group_value ? 'id')" in rpc
+    assert "not (group_value ? 'canonical_title')" in rpc
+    assert "not (group_value ? 'existing')" in rpc
+    assert "not (mapping_value ? 'cleaned_name')" in rpc
+    assert "not (mapping_value ? 'group_id')" in rpc
+    assert "jsonb_typeof(unmap_value) <> 'string'" in rpc
+    assert "jsonb_object_keys(payload)" in rpc
+    assert "jsonb_object_keys(group_value)" in rpc
+    assert "jsonb_object_keys(mapping_value)" in rpc
+    assert "field_name not in ('groups', 'mappings', 'unmap_names')" in rpc
+    assert "field_name not in ('id', 'canonical_title', 'canonical_key', 'existing', 'title_embedding')" in rpc
+    assert "field_name not in ('cleaned_name', 'lookup_key', 'group_id', 'member_embedding')" in rpc
+    first_staging_insert = rpc.index("insert into _review_groups")
+    assert all(rpc.index(check) < first_staging_insert for check in (*group_checks, *mapping_checks))
+    assert rpc.index("jsonb_typeof(unmap_value) <> 'string'") < first_staging_insert
+
+
+def test_embedding_validator_guards_type_before_array_and_numeric_operations():
+    sql = (Path(__file__).parents[1] / "supabase" / "schema.sql").read_text().lower()
+    helper = sql.split("create or replace function public.valid_review_embedding(value jsonb)", 1)[1]
+    helper = helper.split("create or replace function public.review_lookup_key", 1)[0]
+    assert "case" in helper
+    assert "when jsonb_typeof(value) <> 'array' then false" in helper
+    assert "when jsonb_array_length(value) <> 384 then false" in helper
+    assert "when jsonb_typeof(item) <> 'number' then true" in helper
+    assert "abs((item #>> '{}')::numeric) > 3.402823466e38" in helper
