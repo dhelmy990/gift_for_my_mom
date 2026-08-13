@@ -50,15 +50,20 @@ class RpcQuery:
         self.client.rpc_execute_count += 1
         if self.client.error:
             raise self.client.error
-        return Result({"temp-1": "00000000-0000-0000-0000-000000000001"})
+        return Result(self.client.rpc_result)
+
+
+_DEFAULT_RPC_RESULT = object()
 
 
 class FakeClient:
-    def __init__(self, rows=None, error=None):
+    def __init__(self, rows=None, error=None, rpc_result=_DEFAULT_RPC_RESULT):
         self.rows = rows or {}
         self.error = error
         self.rpc_calls = []
         self.rpc_execute_count = 0
+        self.rpc_result = ({"temp-1": "00000000-0000-0000-0000-000000000001"}
+                           if rpc_result is _DEFAULT_RPC_RESULT else rpc_result)
 
     def table(self, name):
         return Query(self, name)
@@ -119,9 +124,9 @@ def test_invalid_vector_becomes_none():
 def test_submit_uses_one_rpc_call_with_exact_payload():
     client = FakeClient()
     repo = SupabaseMappingRepository(client)
-    payload = SubmissionPayload([{"id": "temp-1"}], [], [])
+    payload = SubmissionPayload([{"id": "temp-1"}], [], [], "11111111-1111-4111-8111-111111111111")
     result = repo.submit(payload)
-    assert client.rpc_calls == [("submit_name_review", {"payload": {"groups": [{"id": "temp-1"}], "mappings": [], "unmap_names": []}})]
+    assert client.rpc_calls == [("submit_name_review", {"payload": {"groups": [{"id": "temp-1"}], "mappings": [], "unmap_names": [], "request_id": "11111111-1111-4111-8111-111111111111"}})]
     assert client.rpc_execute_count == 1
     assert result == {"temp-1": "00000000-0000-0000-0000-000000000001"}
 
@@ -143,6 +148,32 @@ def test_client_errors_are_safely_wrapped():
     assert "list groups" in str(caught.value)
     assert "service-key-secret" not in str(caught.value)
     assert "exploded" not in str(caught.value)
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    "method,rows",
+    [
+        (lambda repo: repo.list_groups(), {"name_groups": None}),
+        (lambda repo: repo.list_groups(), {"name_groups": [None]}),
+        (lambda repo: repo.list_groups(), {"name_groups": [{"id": "g", "canonical_title": "G", "title_embedding": ["wrong"]}]}),
+        (lambda repo: repo.get_exact_mappings(["A"]), {"name_mappings": [{"lookup_key": "a", "group_id": "g", "cleaned_name": "A", "name_groups": None}]}),
+        (lambda repo: repo.list_candidates(), {"name_mappings": [{"group_id": "g", "cleaned_name": "A", "name_groups": {}}]}),
+        (lambda repo: repo.export_rows(), {"name_mappings": "wrong"}),
+    ],
+)
+def test_malformed_query_responses_are_safely_wrapped(method, rows):
+    with pytest.raises(RepositoryUnavailableError, match="Repository unavailable") as caught:
+        method(repository(rows))
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.parametrize("result", [None, [], {"temp-1": None}, {"temp-1": ["bad"]}])
+def test_malformed_submit_responses_are_safely_wrapped(result):
+    repo = SupabaseMappingRepository(FakeClient(rpc_result=result))
+    payload = SubmissionPayload([], [], [], "11111111-1111-4111-8111-111111111111")
+    with pytest.raises(RepositoryUnavailableError, match="Repository unavailable during submit review") as caught:
+        repo.submit(payload)
     assert caught.value.__cause__ is None
 
 
@@ -171,6 +202,11 @@ def test_schema_contains_security_vector_and_atomic_review_contract():
     assert "replace(lower" in sql and "'ß', 'ss'" in sql
     assert "public.review_lookup_key(coalesce" in sql
     assert "member_embedding = case when mapping_item.raw ? 'member_embedding'" in sql
+    assert "create table if not exists public.submission_ledger" in sql
+    assert "request_id" in sql and "payload_fingerprint" in sql and "result jsonb" in sql
+    assert "alter table public.submission_ledger enable row level security" in sql
+    assert "revoke all on table public.submission_ledger from public, anon, authenticated" in sql
+    assert "pg_advisory_xact_lock(hashtextextended" in sql
 
 
 def test_review_rpc_stages_trimmed_identity_fields_before_checks_and_writes():
@@ -222,7 +258,7 @@ def test_review_rpc_validates_raw_json_field_types_before_staging():
     assert "jsonb_object_keys(payload)" in rpc
     assert "jsonb_object_keys(group_value)" in rpc
     assert "jsonb_object_keys(mapping_value)" in rpc
-    assert "field_name not in ('groups', 'mappings', 'unmap_names')" in rpc
+    assert "field_name not in ('groups', 'mappings', 'unmap_names', 'request_id')" in rpc
     assert "field_name not in ('id', 'canonical_title', 'canonical_key', 'existing', 'title_embedding')" in rpc
     assert "field_name not in ('cleaned_name', 'lookup_key', 'group_id', 'member_embedding')" in rpc
     first_staging_insert = rpc.index("insert into _review_groups")

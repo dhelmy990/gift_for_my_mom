@@ -1,7 +1,8 @@
 """Domain objects for reviewing cleaned company names."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
+from uuid import uuid4
 
 
 @dataclass
@@ -31,3 +32,4 @@ class SubmissionPayload:
     groups: list[dict[str, object]]
     mappings: list[dict[str, object]]
     unmap_names: list[str]
+    request_id: str = field(default_factory=lambda: str(uuid4()))

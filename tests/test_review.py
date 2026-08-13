@@ -190,14 +190,27 @@ def test_build_submission_retains_existing_empty_groups_and_omits_new_empty_grou
         names=[NameRecord("Alias", "new-used", "suggested", selected=True)],
     )
 
-    assert build_submission(review, {}) == SubmissionPayload(
+    payload = build_submission(review, {})
+    assert payload.groups == [
+        {"id": "existing", "canonical_title": "Existing", "existing": True},
+        {"id": "new-used", "canonical_title": "New Used", "existing": False},
+    ]
+    assert payload.mappings == [{"cleaned_name": "Alias", "group_id": "new-used"}]
+    assert payload.unmap_names == []
+    assert isinstance(payload.request_id, str)
+    assert payload.request_id
+
+
+def test_submission_payload_keeps_one_request_id_for_retries() -> None:
+    payload = SubmissionPayload(
         groups=[
-            {"id": "existing", "canonical_title": "Existing", "existing": True},
             {"id": "new-used", "canonical_title": "New Used", "existing": False},
         ],
         mappings=[{"cleaned_name": "Alias", "group_id": "new-used"}],
         unmap_names=[],
+        request_id="11111111-1111-4111-8111-111111111111",
     )
+    assert payload.request_id == "11111111-1111-4111-8111-111111111111"
 
 
 def test_build_submission_only_unmaps_original_names_deliberately_returned_to_inventory() -> None:

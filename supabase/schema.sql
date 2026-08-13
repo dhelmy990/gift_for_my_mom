@@ -1,6 +1,17 @@
 create extension if not exists vector;
 create extension if not exists pgcrypto;
 
+create table if not exists public.submission_ledger (
+  request_id uuid primary key,
+  payload_fingerprint text not null,
+  result jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.submission_ledger enable row level security;
+revoke all on table public.submission_ledger from public, anon, authenticated;
+grant select, insert on table public.submission_ledger to service_role;
+
 create table if not exists public.name_groups (
   id uuid primary key default gen_random_uuid(),
   canonical_title text not null check (btrim(canonical_title) <> ''),
@@ -105,18 +116,39 @@ declare
   groups_value jsonb;
   mappings_value jsonb;
   unmaps_value jsonb;
+  request_uuid uuid;
+  payload_fingerprint text;
+  prior_fingerprint text;
+  prior_result jsonb;
 begin
   if payload is null or jsonb_typeof(payload) <> 'object' then
     raise exception using errcode = '22023', message = 'review payload must be an object';
   end if;
   if exists (
     select 1 from jsonb_object_keys(payload) field_name
-    where field_name not in ('groups', 'mappings', 'unmap_names')
+    where field_name not in ('groups', 'mappings', 'unmap_names', 'request_id')
   ) then
     raise exception using errcode = '22023', message = 'unknown review payload field';
   end if;
-  if not (payload ? 'groups') or not (payload ? 'mappings') or not (payload ? 'unmap_names') then
+  if not (payload ? 'groups') or not (payload ? 'mappings') or not (payload ? 'unmap_names')
+     or not (payload ? 'request_id') or jsonb_typeof(payload->'request_id') <> 'string' then
     raise exception using errcode = '22023', message = 'review payload arrays are required';
+  end if;
+  begin
+    request_uuid := btrim(payload->>'request_id')::uuid;
+  exception when invalid_text_representation then
+    raise exception using errcode = '22023', message = 'invalid request id';
+  end;
+  payload_fingerprint := encode(digest((payload - 'request_id')::text, 'sha256'), 'hex');
+  perform pg_advisory_xact_lock(hashtextextended(request_uuid::text, 0));
+  select ledger.payload_fingerprint, ledger.result
+    into prior_fingerprint, prior_result
+    from public.submission_ledger ledger where ledger.request_id = request_uuid;
+  if found then
+    if prior_fingerprint <> payload_fingerprint then
+      raise exception using errcode = '23505', message = 'request id payload conflict';
+    end if;
+    return prior_result;
   end if;
   groups_value := payload->'groups';
   mappings_value := payload->'mappings';
@@ -316,6 +348,8 @@ begin
       member_embedding = case when mapping_item.raw ? 'member_embedding'
         then excluded.member_embedding else public.name_mappings.member_embedding end;
   end loop;
+  insert into public.submission_ledger(request_id, payload_fingerprint, result)
+  values (request_uuid, payload_fingerprint, temp_map);
   return temp_map;
 end;
 $$;
