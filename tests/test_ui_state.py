@@ -9,6 +9,7 @@ from company_names.ui import (
     _board_revision,
     _bind_admin_session,
     _component_containers,
+    _display_groups,
     _restore_container_ids,
     _review_styles,
     _move_record,
@@ -30,6 +31,7 @@ from company_names.ui import (
     group_title_errors,
     move_to_tray,
     review_summary,
+    review_errors,
     semantic_pill,
     return_to_separate,
     return_to_inventory,
@@ -209,6 +211,19 @@ def test_every_local_group_title_error_also_blocks_board_validation():
         assert validate_board(candidate)
 
 
+def test_empty_existing_group_title_error_is_in_review_save_errors():
+    state = board()
+    move_to_tray(state, ["Alpha"])
+    proposed = {"existing": ""}
+    local_errors = group_title_errors(state, proposed)
+    apply_group_titles(state, proposed)
+
+    errors = review_errors(state, local_errors)
+
+    assert local_errors == {"existing": "Enter a final company name."}
+    assert any("Enter a final company name." in error for error in errors)
+
+
 def test_direct_member_callbacks_move_between_tray_and_separate():
     state = board()
 
@@ -382,6 +397,32 @@ def test_sortable_board_does_not_render_empty_group_containers():
         "Alpha Group",
         "Left out of this report",
     ]
+
+
+def test_existing_group_remains_available_after_sole_member_moves_to_tray():
+    state = board()
+
+    move_to_tray(state, ["Alpha"])
+
+    assert [group.id for group in _display_groups(state)] == ["existing"]
+    containers = sortable_containers(state)
+    assert "Alpha Group" in [container["header"] for container in containers]
+
+    _move_record(state, "Alpha", "group:existing")
+    assert state.names["Alpha"].group_id == "existing"
+    assert state.names["Alpha"].selected is True
+
+
+def test_empty_new_group_is_hidden_but_empty_existing_group_is_visible():
+    state = board()
+    empty_new = create_group(state)
+    move_to_tray(state, ["Alpha"])
+
+    displayed_ids = [group.id for group in _display_groups(state)]
+
+    assert "existing" in displayed_ids
+    assert "new-old" not in displayed_ids
+    assert empty_new.id not in displayed_ids
 
 
 def test_unknown_selection_and_inventory_moves_are_rejected():

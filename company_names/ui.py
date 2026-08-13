@@ -65,7 +65,11 @@ def _display_groups(board: ReviewBoard) -> list[Group]:
         for record in board.names.values()
         if record.selected and not record.excluded and record.group_id is not None
     }
-    return [group for group in board.groups.values() if group.id in referenced]
+    return [
+        group
+        for group in board.groups.values()
+        if group.existing or group.id in referenced
+    ]
 
 
 def sortable_containers(board: ReviewBoard) -> list[dict[str, object]]:
@@ -374,6 +378,18 @@ def review_summary(board: ReviewBoard) -> dict[str, int]:
         "tray": len(_tray_names(board)),
         "excluded": sum(record.excluded for record in board.names.values()),
     }
+
+
+def review_errors(
+    board: ReviewBoard, title_errors: dict[str, str]
+) -> list[str]:
+    """Combine domain submission errors with errors for submitted existing groups."""
+    errors = validate_submission(board)
+    errors.extend(
+        f"{board.groups[group_id].canonical_title or 'Untitled group'}: {error}"
+        for group_id, error in title_errors.items()
+    )
+    return errors
 
 
 def create_group(board: ReviewBoard) -> Group:
@@ -778,7 +794,7 @@ def render_name_review(
                 _move_record(board, chosen, destination)
                 st.rerun()
 
-    errors = validate_submission(board)
+    errors = review_errors(board, title_errors)
     if errors:
         st.error("Review is not ready:\n\n" + "\n\n".join(f"- {error}" for error in errors))
 
