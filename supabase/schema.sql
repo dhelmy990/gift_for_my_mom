@@ -94,9 +94,9 @@ security invoker
 set search_path = pg_catalog, public
 as $$
 declare
-  group_item jsonb;
-  mapping_item jsonb;
-  unmap_item jsonb;
+  group_item record;
+  mapping_item record;
+  unmap_item record;
   resolved_id uuid;
   temp_map jsonb := '{}'::jsonb;
   groups_value jsonb;
@@ -117,102 +117,130 @@ begin
      or jsonb_typeof(unmaps_value) <> 'array' then
     raise exception using errcode = '22023', message = 'groups, mappings, and unmap_names must be arrays';
   end if;
-  if exists (select 1 from jsonb_array_elements(groups_value) g
-             group by g->>'id' having count(*) > 1) then
+
+  drop table if exists pg_temp._review_groups;
+  drop table if exists pg_temp._review_mappings;
+  drop table if exists pg_temp._review_unmaps;
+  create temporary table _review_groups (
+    raw jsonb not null,
+    temp_id text,
+    canonical_title text,
+    canonical_key text
+  ) on commit drop;
+  create temporary table _review_mappings (
+    raw jsonb not null,
+    cleaned_name text,
+    lookup_key text,
+    group_ref text
+  ) on commit drop;
+  create temporary table _review_unmaps (
+    raw jsonb not null,
+    cleaned_name text
+  ) on commit drop;
+
+  insert into _review_groups(raw, temp_id, canonical_title, canonical_key)
+  select group_value,
+         btrim(group_value->>'id'),
+         btrim(group_value->>'canonical_title'),
+         public.review_lookup_key(coalesce(group_value->>'canonical_key', group_value->>'canonical_title'))
+  from jsonb_array_elements(groups_value) group_value;
+  insert into _review_mappings(raw, cleaned_name, lookup_key, group_ref)
+  select mapping_value,
+         btrim(mapping_value->>'cleaned_name'),
+         public.review_lookup_key(coalesce(mapping_value->>'lookup_key', mapping_value->>'cleaned_name')),
+         btrim(mapping_value->>'group_id')
+  from jsonb_array_elements(mappings_value) mapping_value;
+  insert into _review_unmaps(raw, cleaned_name)
+  select unmap_value, btrim(unmap_value #>> '{}')
+  from jsonb_array_elements(unmaps_value) unmap_value;
+
+  if exists (select 1 from _review_groups group by temp_id having count(*) > 1) then
     raise exception using errcode = '23505', message = 'duplicate group id';
   end if;
-  if exists (select 1 from jsonb_array_elements(groups_value) g
-             group by lower(btrim(g->>'canonical_title')) having count(*) > 1) then
+  if exists (select 1 from _review_groups
+             group by lower(canonical_title) having count(*) > 1) then
     raise exception using errcode = '23505', message = 'duplicate group title';
   end if;
-  if exists (select 1 from jsonb_array_elements(groups_value) g
-             group by public.review_lookup_key(coalesce(g->>'canonical_key', g->>'canonical_title'))
-             having count(*) > 1) then
+  if exists (select 1 from _review_groups group by canonical_key having count(*) > 1) then
     raise exception using errcode = '23505', message = 'duplicate group key';
   end if;
-  if exists (select 1 from jsonb_array_elements(mappings_value) m
-             group by m->>'cleaned_name' having count(*) > 1) then
+  if exists (select 1 from _review_mappings group by cleaned_name having count(*) > 1) then
     raise exception using errcode = '23505', message = 'duplicate mapping name';
   end if;
-  if exists (select 1 from jsonb_array_elements(mappings_value) m
-             group by public.review_lookup_key(coalesce(m->>'lookup_key', m->>'cleaned_name'))
-             having count(*) > 1) then
+  if exists (select 1 from _review_mappings group by lookup_key having count(*) > 1) then
     raise exception using errcode = '23505', message = 'duplicate mapping key';
   end if;
-  if exists (select 1 from jsonb_array_elements(unmaps_value) u
-             group by u #>> '{}' having count(*) > 1) then
+  if exists (select 1 from _review_unmaps group by cleaned_name having count(*) > 1) then
     raise exception using errcode = '23505', message = 'duplicate unmap name';
   end if;
 
-  for group_item in select value from jsonb_array_elements(groups_value) loop
-    if jsonb_typeof(group_item) <> 'object'
-       or btrim(coalesce(group_item->>'id', '')) = ''
-       or btrim(coalesce(group_item->>'canonical_title', '')) = ''
-       or (group_item ? 'canonical_key' and btrim(coalesce(group_item->>'canonical_key', '')) = '')
-       or public.review_lookup_key(coalesce(group_item->>'canonical_key', group_item->>'canonical_title')) = ''
-       or not public.valid_review_embedding(group_item->'title_embedding') then
+  for group_item in select * from _review_groups loop
+    if jsonb_typeof(group_item.raw) <> 'object'
+       or coalesce(group_item.temp_id, '') = ''
+       or coalesce(group_item.canonical_title, '') = ''
+       or (group_item.raw ? 'canonical_key' and btrim(coalesce(group_item.raw->>'canonical_key', '')) = '')
+       or coalesce(group_item.canonical_key, '') = ''
+       or not public.valid_review_embedding(group_item.raw->'title_embedding') then
       raise exception using errcode = '22023', message = 'invalid group';
     end if;
-    if coalesce((group_item->>'existing')::boolean, false) then
-      begin resolved_id := (group_item->>'id')::uuid;
+    if coalesce((group_item.raw->>'existing')::boolean, false) then
+      begin resolved_id := group_item.temp_id::uuid;
       exception when invalid_text_representation then
         raise exception using errcode = '22023', message = 'invalid existing group id';
       end;
       update public.name_groups set
-        canonical_title = btrim(group_item->>'canonical_title'),
-        canonical_key = public.review_lookup_key(coalesce(group_item->>'canonical_key', group_item->>'canonical_title')),
-        title_embedding = case when group_item ? 'title_embedding' and group_item->'title_embedding' <> 'null'::jsonb
-          then (group_item->'title_embedding')::text::vector else title_embedding end
+        canonical_title = group_item.canonical_title,
+        canonical_key = group_item.canonical_key,
+        title_embedding = case when group_item.raw ? 'title_embedding' and group_item.raw->'title_embedding' <> 'null'::jsonb
+          then (group_item.raw->'title_embedding')::text::vector else title_embedding end
       where id = resolved_id;
       if not found then
         raise exception using errcode = 'P0002', message = 'existing group does not exist';
       end if;
     else
       insert into public.name_groups(canonical_title, canonical_key, title_embedding)
-      values (btrim(group_item->>'canonical_title'),
-              public.review_lookup_key(coalesce(group_item->>'canonical_key', group_item->>'canonical_title')),
-              case when group_item ? 'title_embedding' and group_item->'title_embedding' <> 'null'::jsonb
-                then (group_item->'title_embedding')::text::vector else null end)
+      values (group_item.canonical_title, group_item.canonical_key,
+              case when group_item.raw ? 'title_embedding' and group_item.raw->'title_embedding' <> 'null'::jsonb
+                then (group_item.raw->'title_embedding')::text::vector else null end)
       returning id into resolved_id;
-      temp_map := temp_map || jsonb_build_object(group_item->>'id', resolved_id::text);
+      temp_map := temp_map || jsonb_build_object(group_item.temp_id, resolved_id::text);
     end if;
   end loop;
 
-  for unmap_item in select value from jsonb_array_elements(unmaps_value) loop
-    if jsonb_typeof(unmap_item) <> 'string' or btrim(unmap_item #>> '{}') = '' then
+  for unmap_item in select * from _review_unmaps loop
+    if jsonb_typeof(unmap_item.raw) <> 'string' or coalesce(unmap_item.cleaned_name, '') = '' then
       raise exception using errcode = '22023', message = 'invalid unmap name';
     end if;
-    delete from public.name_mappings where cleaned_name = unmap_item #>> '{}';
+    delete from public.name_mappings where cleaned_name = unmap_item.cleaned_name;
   end loop;
 
-  for mapping_item in select value from jsonb_array_elements(mappings_value) loop
-    if jsonb_typeof(mapping_item) <> 'object'
-       or btrim(coalesce(mapping_item->>'cleaned_name', '')) = ''
-       or btrim(coalesce(mapping_item->>'group_id', '')) = ''
-       or (mapping_item ? 'lookup_key' and btrim(coalesce(mapping_item->>'lookup_key', '')) = '')
-       or public.review_lookup_key(coalesce(mapping_item->>'lookup_key', mapping_item->>'cleaned_name')) = ''
-       or not public.valid_review_embedding(mapping_item->'member_embedding') then
+  for mapping_item in select * from _review_mappings loop
+    if jsonb_typeof(mapping_item.raw) <> 'object'
+       or coalesce(mapping_item.cleaned_name, '') = ''
+       or coalesce(mapping_item.group_ref, '') = ''
+       or (mapping_item.raw ? 'lookup_key' and btrim(coalesce(mapping_item.raw->>'lookup_key', '')) = '')
+       or coalesce(mapping_item.lookup_key, '') = ''
+       or not public.valid_review_embedding(mapping_item.raw->'member_embedding') then
       raise exception using errcode = '22023', message = 'invalid mapping';
     end if;
     begin
-      resolved_id := coalesce(temp_map ->> (mapping_item->>'group_id'), mapping_item->>'group_id')::uuid;
+      resolved_id := coalesce(temp_map ->> mapping_item.group_ref, mapping_item.group_ref)::uuid;
     exception when invalid_text_representation then
       raise exception using errcode = '22023', message = 'mapping references unknown group';
     end;
     if exists (select 1 from public.name_mappings n
-               where n.cleaned_name = mapping_item->>'cleaned_name'
+               where n.cleaned_name = mapping_item.cleaned_name
                and n.group_id <> resolved_id) then
       raise exception using errcode = '23505', message = 'mapping conflict requires explicit unmap';
     end if;
     insert into public.name_mappings(cleaned_name, lookup_key, group_id, member_embedding)
-    values (btrim(mapping_item->>'cleaned_name'),
-            public.review_lookup_key(coalesce(mapping_item->>'lookup_key', mapping_item->>'cleaned_name')),
+    values (mapping_item.cleaned_name, mapping_item.lookup_key,
             resolved_id,
-            case when mapping_item ? 'member_embedding' and mapping_item->'member_embedding' <> 'null'::jsonb
-              then (mapping_item->'member_embedding')::text::vector else null end)
+            case when mapping_item.raw ? 'member_embedding' and mapping_item.raw->'member_embedding' <> 'null'::jsonb
+              then (mapping_item.raw->'member_embedding')::text::vector else null end)
     on conflict (cleaned_name) do update set
       lookup_key = excluded.lookup_key, group_id = excluded.group_id,
-      member_embedding = case when mapping_item ? 'member_embedding'
+      member_embedding = case when mapping_item.raw ? 'member_embedding'
         then excluded.member_embedding else public.name_mappings.member_embedding end;
   end loop;
   return temp_map;

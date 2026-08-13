@@ -170,4 +170,25 @@ def test_schema_contains_security_vector_and_atomic_review_contract():
     assert "function public.review_lookup_key(name text)" in sql
     assert "replace(lower" in sql and "'ß', 'ss'" in sql
     assert "public.review_lookup_key(coalesce" in sql
-    assert "member_embedding = case when mapping_item ? 'member_embedding'" in sql
+    assert "member_embedding = case when mapping_item.raw ? 'member_embedding'" in sql
+
+
+def test_review_rpc_stages_trimmed_identity_fields_before_checks_and_writes():
+    sql = (Path(__file__).parents[1] / "supabase" / "schema.sql").read_text().lower()
+    rpc = sql.split("create or replace function public.submit_name_review(payload jsonb)", 1)[1]
+    rpc = rpc.split("revoke all on function public.set_updated_at()", 1)[0]
+    assert "create temporary table _review_groups" in rpc
+    assert "create temporary table _review_mappings" in rpc
+    assert "create temporary table _review_unmaps" in rpc
+    assert "btrim(group_value->>'id')" in rpc
+    assert "btrim(group_value->>'canonical_title')" in rpc
+    assert "btrim(mapping_value->>'cleaned_name')" in rpc
+    assert "btrim(mapping_value->>'group_id')" in rpc
+    assert "btrim(unmap_value #>> '{}')" in rpc
+    assert "group by cleaned_name having count(*) > 1" in rpc
+    assert "group by temp_id having count(*) > 1" in rpc
+    assert "where n.cleaned_name = mapping_item.cleaned_name" in rpc
+    assert "where cleaned_name = unmap_item.cleaned_name" in rpc
+    assert "group by m->>'cleaned_name'" not in rpc
+    assert "where n.cleaned_name = mapping_item->>'cleaned_name'" not in rpc
+    assert "where cleaned_name = unmap_item #>> '{}'" not in rpc
