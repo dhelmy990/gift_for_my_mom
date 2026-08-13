@@ -80,6 +80,27 @@ def normalize_extracted_rows(rows: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def collate_extracted_rows(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Combine duplicate-safe extractor frames for the legacy result display."""
+    if not frames:
+        return pd.DataFrame(
+            columns=["TRAVEL AGENT", "Sum of RNS", "Sum of R REVENUE"]
+        )
+    combined = pd.concat(frames, ignore_index=True)
+    normalized = normalize_extracted_rows(combined)
+    return (
+        normalized.rename(
+            columns={
+                "cleaned_name": "TRAVEL AGENT",
+                "rns": "Sum of RNS",
+                "revenue": "Sum of R REVENUE",
+            }
+        )
+        .sort_values("Sum of R REVENUE", ascending=False, kind="stable")
+        .reset_index(drop=True)
+    )
+
+
 def prepare_review(
     rows: pd.DataFrame,
     repository: MappingRepository,

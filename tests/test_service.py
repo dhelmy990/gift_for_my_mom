@@ -6,6 +6,7 @@ from company_names.models import Group, NameRecord, ReviewBoard
 from company_names.repository import ExactMapping, GroupRecord
 from company_names.service import (
     ServiceValidationError,
+    collate_extracted_rows,
     normalize_extracted_rows,
     prepare_review,
     submit_review,
@@ -63,6 +64,25 @@ def test_normalize_cleans_and_sums_duplicate_names_as_floats():
     assert result.to_dict("records") == [
         {"cleaned_name": "Acme", "rns": 3.5, "revenue": 30.25},
         {"cleaned_name": "Unknown", "rns": 4.0, "revenue": 40.0},
+    ]
+
+
+def test_collate_extracted_rows_groups_agent_column_not_dataframe_indexes():
+    first = pd.DataFrame(
+        [{"TRAVEL AGENT": "Acme", "Sum of RNS": 2, "Sum of R REVENUE": 10}]
+    )
+    second = pd.DataFrame(
+        [{"TRAVEL AGENT": "Acme", "Sum of RNS": 3, "Sum of R REVENUE": 20}]
+    )
+
+    result = collate_extracted_rows([first, second])
+
+    assert result.to_dict("records") == [
+        {
+            "TRAVEL AGENT": "Acme",
+            "Sum of RNS": 5.0,
+            "Sum of R REVENUE": 30.0,
+        }
     ]
 
 

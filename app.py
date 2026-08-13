@@ -4,8 +4,8 @@ print(f"DEBUG: Functions in plumber: {dir(plumber)}")
 
 import os
 import tempfile
-import pandas as pd
 from plumber import extract_last_table_as_df, two_tablify, extract_all_tables
+from company_names.service import collate_extracted_rows
 
 # Default agents to exclude in collation mode
 DEFAULT_EXCLUDED_AGENTS = ["Grand Total", "TRAVELOKAOne Fullerton", "BBUTTON", "KLOOK", "WALK IN", "RTX Rakuten Tower", "HIS_International", "GENARESSM", "walkin",
@@ -70,15 +70,7 @@ if uploaded_files:
 
                 if all_dfs:
                     # Combine and sum across all PDFs
-                    combined_df = pd.concat(all_dfs)
-                    result_df = combined_df.groupby(combined_df.index).sum()
-
-                    # Sort by revenue descending
-                    result_df = result_df.sort_values('Sum of R REVENUE', ascending=False)
-
-                    # Reset index and rename columns
-                    result_df = result_df.reset_index()
-                    result_df.columns = ['TRAVEL AGENT', 'Sum of RNS', 'Sum of R REVENUE']
+                    result_df = collate_extracted_rows(all_dfs)
 
                     # Add NO column (1-indexed ranking by revenue)
                     result_df.insert(0, 'NO', range(1, len(result_df) + 1))
