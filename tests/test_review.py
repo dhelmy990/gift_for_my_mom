@@ -2,7 +2,14 @@ import pandas as pd
 import pytest
 
 from company_names.models import Group, NameRecord, ReviewBoard, SubmissionPayload
-from company_names.review import aggregate_by_group, build_submission, validate_board
+from company_names.review import (
+    aggregate_by_group,
+    build_submission,
+    materialize_singletons,
+    singleton_group_id,
+    validate_board,
+    validate_submission,
+)
 
 
 def board(*, groups: list[Group], names: list[NameRecord]) -> ReviewBoard:
@@ -12,7 +19,7 @@ def board(*, groups: list[Group], names: list[NameRecord]) -> ReviewBoard:
     )
 
 
-def test_validate_requires_included_names_to_be_grouped_but_ignores_inventory() -> None:
+def test_validate_accepts_separate_and_working_tray_names() -> None:
     review = board(
         groups=[],
         names=[
@@ -21,7 +28,100 @@ def test_validate_requires_included_names_to_be_grouped_but_ignores_inventory() 
         ],
     )
 
-    assert validate_board(review) == ["MTL is included but ungrouped"]
+    assert validate_board(review) == []
+
+
+def test_singleton_group_id_is_a_stable_sha256_identifier() -> None:
+    assert singleton_group_id("Alpha Travel") == (
+        "new-singleton-"
+        "59ca1eb4da3e7e4a0ac2143c4ce27bef3a147201fea8282043df6051ad16646d"
+    )
+
+
+def test_materialize_singletons_returns_a_distinct_deterministic_board() -> None:
+    review = board(
+        groups=[],
+        names=[
+            NameRecord("Zulu Travel", None, "unknown"),
+            NameRecord("Alpha Travel", None, "unknown"),
+        ],
+    )
+
+    first = materialize_singletons(review)
+    second = materialize_singletons(review)
+    alpha_id = singleton_group_id("Alpha Travel")
+    zulu_id = singleton_group_id("Zulu Travel")
+
+    assert first is not review
+    assert first.names["Alpha Travel"] is not review.names["Alpha Travel"]
+    assert review.groups == {}
+    assert review.names["Alpha Travel"].selected is False
+    assert review.names["Alpha Travel"].group_id is None
+    assert first == second
+    assert materialize_singletons(first) == first
+    assert list(first.groups) == [alpha_id, zulu_id]
+    assert first.groups == {
+        alpha_id: Group(alpha_id, "Alpha Travel", False),
+        zulu_id: Group(zulu_id, "Zulu Travel", False),
+    }
+    assert first.names["Alpha Travel"].selected is True
+    assert first.names["Alpha Travel"].group_id == alpha_id
+    assert first.names["Zulu Travel"].selected is True
+    assert first.names["Zulu Travel"].group_id == zulu_id
+
+
+def test_materialize_singletons_leaves_grouped_and_excluded_names_unchanged() -> None:
+    review = board(
+        groups=[Group("exact", "Exact Group", True)],
+        names=[
+            NameRecord("Exact Alias", "exact", "exact", selected=True),
+            NameRecord("Excluded", None, "unknown", selected=True, excluded=True),
+        ],
+    )
+
+    materialized = materialize_singletons(review)
+
+    assert materialized == review
+    assert materialized is not review
+    assert materialized.groups["exact"] is not review.groups["exact"]
+    assert materialized.names["Exact Alias"] is not review.names["Exact Alias"]
+
+
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        (
+            [NameRecord("Alpha", None, "unknown", selected=True)],
+            "Resolve 1 name(s) in the working tray: create a combined group or "
+            "return them to Separate companies.",
+        ),
+        (
+            [
+                NameRecord("Zulu", None, "unknown", selected=True),
+                NameRecord("Alpha", None, "unknown", selected=True),
+            ],
+            "Resolve 2 name(s) in the working tray: create a combined group or "
+            "return them to Separate companies.",
+        ),
+    ],
+)
+def test_validate_submission_rejects_names_in_working_tray(
+    names: list[NameRecord], expected: str
+) -> None:
+    assert validate_submission(board(groups=[], names=names)) == [expected]
+
+
+def test_validate_submission_accepts_an_empty_working_tray() -> None:
+    review = board(
+        groups=[Group("g", "Combined", False)],
+        names=[
+            NameRecord("Separate", None, "unknown"),
+            NameRecord("Grouped", "g", "suggested", selected=True),
+            NameRecord("Excluded", None, "unknown", selected=True, excluded=True),
+        ],
+    )
+
+    assert validate_submission(review) == []
 
 
 def test_validate_rejects_mismatched_name_keys_deterministically() -> None:
@@ -310,10 +410,10 @@ def test_build_submission_rejects_direct_remapping() -> None:
 
 def test_build_submission_rejects_an_invalid_board() -> None:
     review = board(
-        groups=[], names=[NameRecord("MTL", None, "unknown", selected=True)]
+        groups=[], names=[NameRecord("MTL", "missing", "unknown", selected=True)]
     )
 
-    with pytest.raises(ValueError, match="MTL is included but ungrouped"):
+    with pytest.raises(ValueError, match="MTL references unknown group missing"):
         build_submission(review, {})
 
 

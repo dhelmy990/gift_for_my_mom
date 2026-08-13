@@ -1,5 +1,8 @@
 """Validation, persistence payloads, and reporting for review boards."""
 
+from copy import deepcopy
+from hashlib import sha256
+
 import pandas as pd
 
 from .cleaning import normalize_lookup_key
@@ -16,6 +19,25 @@ def _name_key_errors(board: ReviewBoard) -> list[tuple[str, str]]:
         for name_key, record in board.names.items()
         if name_key != record.cleaned_name
     ]
+
+
+def singleton_group_id(cleaned_name: str) -> str:
+    """Return the deterministic group ID for an implicit singleton."""
+    digest = sha256(cleaned_name.encode("utf-8")).hexdigest()
+    return f"new-singleton-{digest}"
+
+
+def materialize_singletons(board: ReviewBoard) -> ReviewBoard:
+    """Copy a board and turn Separate-company records into singleton groups."""
+    materialized = deepcopy(board)
+    for cleaned_name in sorted(materialized.names):
+        record = materialized.names[cleaned_name]
+        if not record.selected and not record.excluded and record.group_id is None:
+            group_id = singleton_group_id(cleaned_name)
+            materialized.groups[group_id] = Group(group_id, cleaned_name, False)
+            record.selected = True
+            record.group_id = group_id
+    return materialized
 
 
 def validate_board(board: ReviewBoard) -> list[str]:
@@ -42,9 +64,6 @@ def validate_board(board: ReviewBoard) -> list[str]:
             errors.append(
                 (cleaned_name, f"{cleaned_name} references unknown group {record.group_id}")
             )
-        if record.selected and not record.excluded and record.group_id is None:
-            errors.append((cleaned_name, f"{cleaned_name} is included but ungrouped"))
-
     populated_groups = [
         group
         for group_id, group in board.groups.items()
@@ -85,6 +104,21 @@ def validate_board(board: ReviewBoard) -> list[str]:
             )
 
     return [message for _, message in sorted(errors, key=lambda item: (item[0], item[1]))]
+
+
+def validate_submission(board: ReviewBoard) -> list[str]:
+    """Validate a board for submission, including an empty working tray."""
+    errors = validate_board(board)
+    working_tray_count = sum(
+        record.selected and not record.excluded and record.group_id is None
+        for record in board.names.values()
+    )
+    if working_tray_count:
+        errors.append(
+            f"Resolve {working_tray_count} name(s) in the working tray: create a "
+            "combined group or return them to Separate companies."
+        )
+    return errors
 
 
 def build_submission(
