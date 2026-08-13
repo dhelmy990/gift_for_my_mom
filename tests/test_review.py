@@ -88,7 +88,7 @@ def test_materialize_singletons_leaves_grouped_and_excluded_names_unchanged() ->
 
 
 @pytest.mark.parametrize("cleaned_name", ["Alpha Travel", "alpha-travel"])
-def test_materialize_singletons_reuses_matching_empty_existing_group(
+def test_materialize_singletons_rejects_matching_empty_existing_group(
     cleaned_name: str,
 ) -> None:
     review = board(
@@ -96,13 +96,19 @@ def test_materialize_singletons_reuses_matching_empty_existing_group(
         names=[NameRecord(cleaned_name, None, "unknown")],
     )
 
-    materialized = materialize_singletons(review)
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Cannot keep {cleaned_name} as a Separate company because its name "
+            r"matches an existing group: Alpha Travel \(existing\)\. Move it to "
+            r"that group, or use the explicit group workflow to give it a "
+            r"different final company name\."
+        ),
+    ):
+        materialize_singletons(review)
 
-    assert materialized.groups == {
-        "existing": Group("existing", "Alpha Travel", True)
-    }
-    assert materialized.names[cleaned_name].selected is True
-    assert materialized.names[cleaned_name].group_id == "existing"
+    assert review.names[cleaned_name].selected is False
+    assert review.names[cleaned_name].group_id is None
 
 
 def test_materialize_singletons_rejects_multiple_matching_group_titles() -> None:
@@ -117,8 +123,10 @@ def test_materialize_singletons_rejects_multiple_matching_group_titles() -> None
     with pytest.raises(
         ValueError,
         match=(
-            "Cannot materialize singleton for Alpha Travel: normalized title "
-            "matches multiple groups: first, second"
+            r"Cannot keep Alpha Travel as a Separate company because its name "
+            r"matches existing groups: Alpha Travel \(first\), alpha-travel "
+            r"\(second\)\. Move it to the correct group, or use the explicit group "
+            r"workflow to give it a different final company name\."
         ),
     ):
         materialize_singletons(review)
@@ -453,7 +461,7 @@ def test_build_submission_materializes_unseen_separate_names_deterministically()
     assert review.groups == {}
 
 
-def test_build_submission_reuses_matching_populated_existing_group() -> None:
+def test_build_submission_rejects_matching_populated_existing_group() -> None:
     review = board(
         groups=[Group("existing", "Alpha Travel", True)],
         names=[
@@ -462,20 +470,15 @@ def test_build_submission_reuses_matching_populated_existing_group() -> None:
         ],
     )
 
-    payload = build_submission(review, {"Existing Alias": "existing"})
-
-    assert payload.groups == [
-        {"id": "existing", "canonical_title": "Alpha Travel", "existing": True}
-    ]
-    assert payload.mappings == [
-        {"cleaned_name": "Alpha Travel", "group_id": "existing"},
-        {"cleaned_name": "Existing Alias", "group_id": "existing"},
-    ]
-    assert payload.unmap_names == []
+    with pytest.raises(
+        ValueError,
+        match=r"Cannot keep Alpha Travel as a Separate company.*Move it to that group",
+    ):
+        build_submission(review, {"Existing Alias": "existing"})
 
 
 @pytest.mark.parametrize("cleaned_name", ["Alpha Travel", "alpha-travel"])
-def test_build_submission_reuses_matching_empty_existing_group(
+def test_build_submission_rejects_matching_empty_existing_group(
     cleaned_name: str,
 ) -> None:
     review = board(
@@ -483,15 +486,11 @@ def test_build_submission_reuses_matching_empty_existing_group(
         names=[NameRecord(cleaned_name, None, "unknown")],
     )
 
-    payload = build_submission(review, {})
-
-    assert payload.groups == [
-        {"id": "existing", "canonical_title": "Alpha Travel", "existing": True}
-    ]
-    assert payload.mappings == [
-        {"cleaned_name": cleaned_name, "group_id": "existing"}
-    ]
-    assert payload.unmap_names == []
+    with pytest.raises(
+        ValueError,
+        match=rf"Cannot keep {cleaned_name} as a Separate company.*Move it to that group",
+    ):
+        build_submission(review, {})
 
 
 def test_build_submission_rejects_silent_reuse_of_separated_original_group() -> None:

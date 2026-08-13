@@ -55,21 +55,28 @@ def materialize_singletons(
                     "current group has the same title. Rename the existing group "
                     "before separating this name."
                 )
-            matching_group_ids = [
+            matching_group_ids = sorted(
                 group_id
                 for group_id in all_matching_group_ids
                 if group_id != original_group_id
-            ]
-            if len(matching_group_ids) > 1:
-                matches = ", ".join(matching_group_ids)
-                raise ValueError(
-                    f"Cannot materialize singleton for {cleaned_name}: normalized "
-                    f"title matches multiple groups: {matches}"
-                )
+            )
             if matching_group_ids:
-                record.selected = True
-                record.group_id = matching_group_ids[0]
-                continue
+                matches = ", ".join(
+                    f"{materialized.groups[group_id].canonical_title} ({group_id})"
+                    for group_id in matching_group_ids
+                )
+                if len(matching_group_ids) == 1:
+                    group_description = f"an existing group: {matches}"
+                    destination = "that group"
+                else:
+                    group_description = f"existing groups: {matches}"
+                    destination = "the correct group"
+                raise ValueError(
+                    f"Cannot keep {cleaned_name} as a Separate company because its "
+                    f"name matches {group_description}. Move it to {destination}, or "
+                    "use the explicit group workflow to give it a different final "
+                    "company name."
+                )
 
             group_id = singleton_group_id(cleaned_name)
             existing_group = materialized.groups.get(group_id)

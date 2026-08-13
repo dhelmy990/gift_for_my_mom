@@ -251,6 +251,34 @@ def test_group_title_errors_reports_blank_unusable_and_both_duplicate_titles():
     }
 
 
+def test_group_title_errors_rejects_visible_title_matching_hidden_catalog_group():
+    state = board()
+    state.groups["hidden"] = Group("hidden", "Hidden Holdings Pte Ltd", True)
+
+    errors = group_title_errors(
+        state,
+        {"new-old": "hidden-holdings"},
+        visible_group_ids={"existing", "new-old"},
+    )
+
+    assert errors == {
+        "new-old": "Another group uses the same final company name.",
+    }
+    assert review_errors(state, errors)[-1] == (
+        "New Group: Another group uses the same final company name."
+    )
+
+
+def test_group_title_errors_does_not_conflict_with_unchanged_visible_group_itself():
+    state = board()
+
+    assert group_title_errors(
+        state,
+        {"existing": "Alpha Group"},
+        visible_group_ids={"existing"},
+    ) == {}
+
+
 def test_every_local_group_title_error_also_blocks_board_validation():
     state = board()
     state.names["Beta"].selected = True

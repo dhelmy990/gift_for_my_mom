@@ -261,19 +261,22 @@ def apply_group_titles(board: ReviewBoard, values: dict[str, str]) -> None:
         board.groups[group_id].canonical_title = title
 
 
-def group_title_errors(board: ReviewBoard, values: dict[str, str]) -> dict[str, str]:
-    """Validate proposed group titles together so duplicate errors are symmetric."""
+def group_title_errors(
+    board: ReviewBoard,
+    values: dict[str, str],
+    visible_group_ids: set[str] | None = None,
+) -> dict[str, str]:
+    """Validate visible title edits against every group in the board catalog."""
     errors: dict[str, str] = {}
-    normalized: dict[str, str] = {}
-    relevant_ids = set(values)
+    editable_ids = set(values) if visible_group_ids is None else set(visible_group_ids)
+    unknown_ids = (set(values) | editable_ids) - set(board.groups)
+    if unknown_ids:
+        raise KeyError(sorted(unknown_ids)[0])
     effective_titles = {
         group_id: values.get(group_id, group.canonical_title)
         for group_id, group in board.groups.items()
-        if group_id in relevant_ids
     }
-    for group_id in values:
-        if group_id not in board.groups:
-            raise KeyError(group_id)
+    normalized: dict[str, str] = {}
     for group_id, title in effective_titles.items():
         if not title.strip():
             if group_id in values:
@@ -291,7 +294,7 @@ def group_title_errors(board: ReviewBoard, values: dict[str, str]) -> dict[str, 
     for group_ids in ids_by_title.values():
         if len(group_ids) > 1:
             for group_id in group_ids:
-                if group_id in values:
+                if group_id in values and group_id in editable_ids:
                     errors[group_id] = "Another group uses the same final company name."
     return errors
 
@@ -767,7 +770,11 @@ def render_name_review(
                 on_click=_move_to_tray_callback,
                 args=(board, name),
             )
-    title_errors = group_title_errors(board, title_values)
+    title_errors = group_title_errors(
+        board,
+        title_values,
+        visible_group_ids={group.id for group in ordered_groups},
+    )
     for group_id, error in title_errors.items():
         title_error_slots[group_id].error(error)
     apply_group_titles(board, title_values)
