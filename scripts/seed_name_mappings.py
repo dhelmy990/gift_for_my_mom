@@ -6,10 +6,15 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import replace
+import hashlib
+import json
+import math
+from numbers import Real
 import os
 from pathlib import Path
 import sys
 from typing import Callable, Mapping, TextIO
+from uuid import NAMESPACE_URL, uuid5
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,6 +25,7 @@ from company_names.review import build_submission
 
 
 EXPECTED_HEADER = ["input_text", "target_text", "remarks"]
+EMBEDDING_BATCH_SIZE = 64
 
 
 class SeedValidationError(ValueError):
@@ -77,34 +83,49 @@ def load_seed_rows(path: Path) -> list[tuple[str, str]]:
                 continue
             unique[input_key] = (cleaned, target, target_key, row_number)
 
-    return [(cleaned, target) for cleaned, target, _, _ in unique.values()]
+    rows = [(cleaned, target) for cleaned, target, _, _ in unique.values()]
+    if not rows:
+        raise SeedValidationError("seed CSV contains no mappings")
+    return sorted(rows, key=lambda item: (normalize_lookup_key(item[1]), normalize_lookup_key(item[0])))
 
 
 def _build_payload(rows: list[tuple[str, str]]) -> SubmissionPayload:
     groups: dict[str, Group] = {}
     group_ids: dict[str, str] = {}
     names: dict[str, NameRecord] = {}
-    for cleaned, target in rows:
+    for cleaned, target in sorted(rows, key=lambda item: (normalize_lookup_key(item[1]), normalize_lookup_key(item[0]))):
         target_key = normalize_lookup_key(target)
         group_id = group_ids.get(target_key)
         if group_id is None:
-            group_id = f"seed-{len(group_ids) + 1}"
+            group_id = "seed-" + hashlib.sha256(target_key.encode("utf-8")).hexdigest()
             group_ids[target_key] = group_id
             groups[group_id] = Group(group_id, target, False)
         names[cleaned] = NameRecord(cleaned, group_id, "exact", selected=True)
-    return build_submission(ReviewBoard(groups, names), {})
+    provisional = build_submission(ReviewBoard(groups, names), {})
+    logical = {"groups": provisional.groups, "mappings": provisional.mappings, "unmap_names": provisional.unmap_names}
+    canonical = json.dumps(logical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return replace(provisional, request_id=str(uuid5(NAMESPACE_URL, canonical)))
 
 
 def _with_embeddings(payload: SubmissionPayload, vectors: list[list[float]]) -> SubmissionPayload:
     expected = len(payload.groups) + len(payload.mappings)
     if len(vectors) != expected:
         raise SeedValidationError(f"embedding provider returned {len(vectors)} vectors; expected {expected}")
+    snapshots: list[list[float]] = []
     for vector in vectors:
+        if not isinstance(vector, (list, tuple)):
+            raise SeedValidationError("embedding provider returned a non-vector value")
         if len(vector) != 384:
             raise SeedValidationError(f"embedding provider returned a {len(vector)}-dimensional vector; expected 384")
+        if any(isinstance(value, bool) or not isinstance(value, Real) for value in vector):
+            raise SeedValidationError("embedding provider returned a non-numeric vector component")
+        snapshot = [float(value) for value in vector]
+        if not all(math.isfinite(value) for value in snapshot):
+            raise SeedValidationError("embedding provider returned a non-finite vector component")
+        snapshots.append(snapshot)
     split = len(payload.groups)
-    groups = [dict(group, title_embedding=list(vector)) for group, vector in zip(payload.groups, vectors[:split])]
-    mappings = [dict(mapping, member_embedding=list(vector)) for mapping, vector in zip(payload.mappings, vectors[split:])]
+    groups = [dict(group, title_embedding=vector) for group, vector in zip(payload.groups, snapshots[:split])]
+    mappings = [dict(mapping, member_embedding=vector) for mapping, vector in zip(payload.mappings, snapshots[split:])]
     return replace(payload, groups=groups, mappings=mappings)
 
 
@@ -140,7 +161,10 @@ def run(
 
     texts = [str(group["canonical_title"]) for group in payload.groups]
     texts.extend(str(mapping["cleaned_name"]) for mapping in payload.mappings)
-    vectors = embedding_factory().embed(texts)
+    embedder = embedding_factory()
+    vectors = []
+    for start in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+        vectors.extend(embedder.embed(texts[start : start + EMBEDDING_BATCH_SIZE]))
     payload = _with_embeddings(payload, vectors)
     repository_factory(url, key).submit(payload)
     print(f"Submitted request {payload.request_id}.", file=stdout)
@@ -155,7 +179,12 @@ def main(argv: list[str] | None = None, *, stderr: TextIO = sys.stderr) -> int:
     try:
         return run(args.path, apply=args.apply)
     except Exception as exc:
-        print(f"error: {exc}", file=stderr)
+        message = str(exc)
+        for name in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY"):
+            value = os.environ.get(name, "")
+            if value:
+                message = message.replace(value, "[REDACTED]")
+        print(f"error: {message}", file=stderr)
         return 1
 
 

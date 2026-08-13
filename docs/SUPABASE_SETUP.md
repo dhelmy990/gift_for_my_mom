@@ -121,6 +121,10 @@ export SUPABASE_SERVICE_KEY="YOUR-SERVER-SIDE-SECRET-KEY"
 python3 scripts/seed_name_mappings.py company_name_normalization_finetuning.csv --apply
 ```
 
+The importer derives its request ID from the normalized logical mappings, so retrying
+the same CSV after a lost response reuses the same atomic RPC identity. Embeddings are
+generated in bounded batches of 64 while the database update remains one submission.
+
 The importer does not need `ADMIN_PASSWORD`. Replace the placeholders only in your
 local shell; never put real credentials in this document, the CSV, source code, or
 Git commits.
