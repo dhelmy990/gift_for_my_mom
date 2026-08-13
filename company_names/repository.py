@@ -161,19 +161,25 @@ class SupabaseMappingRepository:
         return self._parse("get exact mappings", parse)
 
     def list_candidates(self) -> list[Candidate]:
+        groups = self.list_groups()
         data = self._execute(
             "list candidates",
             lambda: self._client.table("name_mappings")
-            .select("group_id,cleaned_name,member_embedding,name_groups(canonical_title)"),
+            .select("group_id,cleaned_name,member_embedding"),
         )
         def parse() -> list[Candidate]:
-            rows = []
+            group_titles = {group.id: group.canonical_title for group in groups}
+            rows = [
+                Candidate(
+                    group.id, group.canonical_title, group.canonical_title,
+                    group.title_embedding,
+                )
+                for group in groups
+            ]
             for row in self._rows(data):
-                group = row["name_groups"]
-                if not isinstance(group, dict):
-                    raise TypeError("nested group must be an object")
+                group_id = self._text(row["group_id"])
                 rows.append(Candidate(
-                    self._text(row["group_id"]), self._text(group["canonical_title"]),
+                    group_id, group_titles[group_id],
                     self._text(row["cleaned_name"]), _vector(row.get("member_embedding")),
                 ))
             return rows

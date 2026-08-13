@@ -156,6 +156,46 @@ def test_prepare_falls_back_to_fuzzy_suggestions_when_embedding_fails():
     assert "embedding" in prepared.warnings[0].lower()
 
 
+def test_prepare_ranks_group_by_title_embedding_over_opposing_member_embedding():
+    aligned = tuple([1.0] * 384)
+    opposing = tuple([-1.0] * 384)
+    repo = FakeRepository(
+        candidates=[
+            Candidate("g1", "Northstar Voyages", "Northstar Voyages", aligned),
+            Candidate("g1", "Northstar Voyages", "Unrelated Member", opposing),
+            Candidate("g2", "Other Group", "Other Member", tuple([0.0] * 384)),
+        ],
+        groups=[
+            GroupRecord("g1", "Northstar Voyages", aligned),
+            GroupRecord("g2", "Other Group", None),
+        ],
+    )
+
+    prepared = prepare_review(
+        pd.DataFrame({"agent_name": ["Mystery Agency"], "rns": [1], "revenue": [1]}),
+        repo,
+        FakeEmbedder(),
+    )
+
+    assert prepared.suggestions["Mystery Agency"][0].group_id == "g1"
+    assert [suggestion.group_id for suggestion in prepared.suggestions["Mystery Agency"]].count("g1") == 1
+
+
+def test_prepare_suggests_empty_group_from_title_candidate_without_vector():
+    repo = FakeRepository(
+        candidates=[Candidate("g1", "Blue Horizon Travel", "Blue Horizon Travel", None)],
+        groups=[GroupRecord("g1", "Blue Horizon Travel", None)],
+    )
+
+    prepared = prepare_review(
+        pd.DataFrame({"agent_name": ["Blue Horizon"], "rns": [1], "revenue": [1]}),
+        repo,
+        FakeEmbedder(fail=True),
+    )
+
+    assert prepared.suggestions["Blue Horizon"][0].group_id == "g1"
+
+
 def test_prepare_batches_unknown_embeddings_and_preserves_order():
     rows = pd.DataFrame({"agent_name": [f"Name {i} X" for i in range(257)], "rns": 1, "revenue": 1})
     embedder = FakeEmbedder()

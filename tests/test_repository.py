@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from company_names.models import SubmissionPayload
+from company_names.matching import Candidate
 from company_names.models import Group, NameRecord, ReviewBoard
 from company_names.review import build_submission
 from company_names.repository import (
@@ -115,7 +116,40 @@ def test_list_groups_and_candidates_parse_vectors():
         "name_mappings": [{"group_id": "g1", "cleaned_name": "Beta Ltd", "member_embedding": "[3,4]", "name_groups": {"canonical_title": "Beta"}}],
     })
     assert repo.list_groups()[0].title_embedding == (1.0, 2.0)
-    assert repo.list_candidates()[0].vector == (3.0, 4.0)
+    candidates = repo.list_candidates()
+    assert candidates[0] == Candidate("g1", "Beta", "Beta", (1.0, 2.0))
+    assert candidates[1].vector == (3.0, 4.0)
+
+
+def test_list_candidates_includes_title_for_group_without_mappings():
+    repo = repository({
+        "name_groups": [{
+            "id": "g1", "canonical_title": "Empty Group", "title_embedding": [1, 2]
+        }],
+        "name_mappings": [],
+    })
+
+    assert repo.list_candidates() == [
+        Candidate("g1", "Empty Group", "Empty Group", (1.0, 2.0))
+    ]
+
+
+def test_list_candidates_includes_title_and_all_members_for_group():
+    repo = repository({
+        "name_groups": [{
+            "id": "g1", "canonical_title": "Beta", "title_embedding": None
+        }],
+        "name_mappings": [
+            {"group_id": "g1", "cleaned_name": "Beta Ltd", "member_embedding": [3, 4], "name_groups": {"canonical_title": "Beta"}},
+            {"group_id": "g1", "cleaned_name": "BETA Travel", "member_embedding": None, "name_groups": {"canonical_title": "Beta"}},
+        ],
+    })
+
+    assert repo.list_candidates() == [
+        Candidate("g1", "Beta", "Beta", None),
+        Candidate("g1", "Beta", "Beta Ltd", (3.0, 4.0)),
+        Candidate("g1", "Beta", "BETA Travel", None),
+    ]
 
 
 def test_invalid_vector_becomes_none():

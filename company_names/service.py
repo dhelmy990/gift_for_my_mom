@@ -205,17 +205,26 @@ def prepare_review(
     normalized_rows = normalize_extracted_rows(rows)
     names = normalized_rows["cleaned_name"].tolist()
     exact = repository.get_exact_mappings(names)
-    groups = {
-        item.id: Group(item.id, item.canonical_title, True)
-        for item in repository.list_groups()
-    }
+
+    unknown_names = [name for name in names if name not in exact]
+    candidates = repository.list_candidates() if unknown_names else []
+    if unknown_names:
+        groups = {
+            candidate.group_id: Group(
+                candidate.group_id, candidate.canonical_title, True
+            )
+            for candidate in candidates
+        }
+    else:
+        groups = {
+            item.id: Group(item.id, item.canonical_title, True)
+            for item in repository.list_groups()
+        }
     for mapping in exact.values():
         groups.setdefault(
             mapping.group_id, Group(mapping.group_id, mapping.canonical_title, True)
         )
 
-    unknown_names = [name for name in names if name not in exact]
-    candidates = repository.list_candidates() if unknown_names else []
     query_vectors: list[list[float] | None] = [None] * len(unknown_names)
     warnings: list[str] = []
     if unknown_names:
