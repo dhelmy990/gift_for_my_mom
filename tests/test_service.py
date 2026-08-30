@@ -120,9 +120,9 @@ def test_exact_alias_is_authoritative() -> None:
         AliasMapping("HKTRM", "hktrm", "Hong Kong TUYI Business Travel Limited")
     ])
     prepared = prepare_aliases(extracted_rows([("HKTRM", 2, 100)]), repository)
-    assert prepared.review_rows == [AliasReviewRow(
+    assert prepared.review_rows == (AliasReviewRow(
         "HKTRM", "Hong Kong TUYI Business Travel Limited", "saved", None
-    )]
+    ),)
 
 
 def test_exact_alias_uses_normalized_key() -> None:
@@ -153,9 +153,9 @@ def test_unknown_without_suggestion_is_new() -> None:
     prepared = prepare_aliases(
         extracted_rows([("Miki Travel", 2, 100)]), FakeAliasRepository([])
     )
-    assert prepared.review_rows == [AliasReviewRow(
+    assert prepared.review_rows == (AliasReviewRow(
         "Miki Travel", "Miki Travel", "new", None
-    )]
+    ),)
 
 
 def test_database_failure_keeps_cleaned_rows_available() -> None:
@@ -165,9 +165,9 @@ def test_database_failure_keeps_cleaned_rows_available() -> None:
     )
     assert prepared.database_available is False
     assert prepared.database_error == "table missing"
-    assert prepared.review_rows == [AliasReviewRow(
+    assert prepared.review_rows == (AliasReviewRow(
         "Miki Travel", "Miki Travel", "new", None
-    )]
+    ),)
 
 
 def test_no_repository_is_a_cleaned_database_unavailable_fallback() -> None:
@@ -181,6 +181,16 @@ def test_alias_review_rows_are_frozen() -> None:
     row = AliasReviewRow("Alias", "Final", "new", None)
     with pytest.raises(FrozenInstanceError):
         row.final_name = "Changed"  # type: ignore[misc]
+
+
+def test_prepared_review_rows_have_immutable_structure() -> None:
+    prepared = prepare_aliases(extracted_rows([("Acme", 2, 100)]), None)
+
+    assert isinstance(prepared.review_rows, tuple)
+    with pytest.raises(AttributeError):
+        prepared.review_rows.append(  # type: ignore[attr-defined]
+            AliasReviewRow("Other", "Other", "new", None)
+        )
 
 
 def test_resolved_names_combine_and_sum() -> None:

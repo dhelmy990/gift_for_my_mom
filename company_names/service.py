@@ -30,10 +30,12 @@ class AliasReviewRow:
     suggestion: AliasSuggestion | None
 
 
-@dataclass(frozen=True)
+@dataclass
 class PreparedAliases:
+    """Alias review state; ``rows`` is mutable session working data."""
+
     rows: pd.DataFrame
-    review_rows: list[AliasReviewRow]
+    review_rows: tuple[AliasReviewRow, ...]
     database_available: bool
     database_error: str | None
 
@@ -150,7 +152,7 @@ def prepare_aliases(
 
     return PreparedAliases(
         normalized.copy(deep=True),
-        list(review_rows),
+        tuple(review_rows),
         database_available,
         database_error,
     )
