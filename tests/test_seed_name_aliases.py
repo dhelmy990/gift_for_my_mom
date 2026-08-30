@@ -104,6 +104,18 @@ def test_invalid_value_diagnostic_is_csv_safe(tmp_path: Path) -> None:
     assert dangerous not in str(error.value)
 
 
+def test_malformed_row_after_multiline_record_reports_physical_line(
+    tmp_path: Path,
+) -> None:
+    path = csv_file(
+        tmp_path,
+        'input_text,target_text,remarks\nAcme,One,"first line\nsecond line"\nBroken\n',
+    )
+
+    with pytest.raises(SeedValidationError, match=r"^row 4 has malformed CSV fields$"):
+        load_alias_rows(path)
+
+
 def test_conflicting_normalized_alias_key_is_rejected(tmp_path: Path) -> None:
     path = csv_file(
         tmp_path,
