@@ -43,10 +43,10 @@ def load_alias_rows(path: Path) -> list[AliasMapping]:
             )
 
         mappings_by_key: dict[str, tuple[AliasMapping, int]] = {}
-        next_row_number = reader.line_num + 1
         for row in reader:
-            row_number = next_row_number
-            next_row_number = reader.line_num + 1
+            # csv.reader.line_num is the ending physical line for this record,
+            # including skipped blank lines and quoted multiline fields.
+            row_number = reader.line_num
             if None in row or any(row.get(field) is None for field in EXPECTED_HEADER):
                 raise SeedValidationError(f"row {row_number} has malformed CSV fields")
 

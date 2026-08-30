@@ -116,6 +116,46 @@ def test_malformed_row_after_multiline_record_reports_physical_line(
         load_alias_rows(path)
 
 
+def test_blank_line_then_malformed_record_reports_physical_line(
+    tmp_path: Path,
+) -> None:
+    path = csv_file(
+        tmp_path,
+        "input_text,target_text,remarks\n\nBroken\n",
+    )
+
+    with pytest.raises(SeedValidationError, match=r"^row 3 has malformed CSV fields$"):
+        load_alias_rows(path)
+
+
+def test_blank_gaps_before_conflict_report_physical_lines(tmp_path: Path) -> None:
+    path = csv_file(
+        tmp_path,
+        "input_text,target_text,remarks\nAcme,First,x\n\n\nACME,Second,y\n",
+    )
+
+    with pytest.raises(
+        SeedValidationError,
+        match=r"^row 5 conflicts with row 2 for alias key 'acme'$",
+    ):
+        load_alias_rows(path)
+
+
+def test_multiline_record_diagnostic_reports_ending_physical_line(
+    tmp_path: Path,
+) -> None:
+    path = csv_file(
+        tmp_path,
+        'input_text,target_text,remarks\n"\n",One,x\n',
+    )
+
+    with pytest.raises(
+        SeedValidationError,
+        match=r"^row 3 has an empty input_text value$",
+    ):
+        load_alias_rows(path)
+
+
 def test_conflicting_normalized_alias_key_is_rejected(tmp_path: Path) -> None:
     path = csv_file(
         tmp_path,
