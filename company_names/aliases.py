@@ -36,9 +36,6 @@ def suggest_alias(
         raise ValueError("threshold must be between 0 and 100")
 
     query = normalize_lookup_key(cleaned_name)
-    if any(query == item.alias_key for item in aliases):
-        return None
-
     scored = [(float(ratio(query, item.alias_key)), item) for item in aliases]
     eligible = [(score, item) for score, item in scored if score >= threshold]
     if not eligible:

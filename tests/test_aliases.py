@@ -36,8 +36,12 @@ def test_equal_best_scores_are_left_unresolved_regardless_of_order() -> None:
     assert suggest_alias("HKTRM C", list(reversed(aliases)), threshold=80.0) is None
 
 
-def test_exact_alias_is_not_returned_as_a_suggestion() -> None:
-    assert suggest_alias("hktrm", [HKTRM]) is None
+def test_exact_spelling_returns_the_unique_candidate_at_full_score() -> None:
+    suggestion = suggest_alias("HKTRM", [HKTRM])
+
+    assert suggestion == AliasSuggestion(
+        "HKTRM", "Hong Kong TUYI Business Travel Limited", 100.0
+    )
 
 
 def test_suggestion_is_frozen() -> None:
