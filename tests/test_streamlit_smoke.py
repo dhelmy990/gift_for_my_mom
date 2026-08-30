@@ -6,6 +6,7 @@ from streamlit.testing.v1 import AppTest
 
 
 FIXTURE_APP = Path(__file__).parent / "fixtures" / "simple_alias_app.py"
+PAGINATED_FIXTURE_APP = Path(__file__).parent / "fixtures" / "paginated_alias_app.py"
 CANONICAL = "Hong Kong TUYI Business Travel Limited"
 
 
@@ -73,3 +74,19 @@ def test_failed_save_retains_typed_final_name_for_retry() -> None:
     assert app.text_input(key="alias_admin_password").value == ""
     assert app.session_state["fixture_repository"].saved == []
     assert any("network unavailable" in item.value for item in app.error)
+
+
+def test_paginated_editor_navigates_without_losing_first_page_edit() -> None:
+    app = AppTest.from_file(PAGINATED_FIXTURE_APP, default_timeout=10).run()
+    assert not app.exception
+    assert app.selectbox(key="alias_status_filter").value == "Needs review"
+    assert app.selectbox(key="alias_page_size").value == 20
+    assert app.session_state["alias_page"] == 1
+
+    app.text_input(key="alias_final_company 00").input("Edited Company").run()
+    app.button(key="alias_next_top").click().run()
+
+    assert not app.exception
+    assert app.session_state["alias_page"] == 2
+    app.button(key="alias_previous_top").click().run()
+    assert app.text_input(key="alias_final_company 00").value == "Edited Company"

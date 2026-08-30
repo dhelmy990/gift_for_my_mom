@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import MutableMapping
+from dataclasses import dataclass
+import math
 
 import pandas as pd
 import streamlit as st
@@ -17,6 +19,33 @@ from .service import (
     password_matches,
     save_alias_changes,
 )
+
+
+ALIAS_FILTER_OPTIONS = (
+    "Needs review",
+    "New names",
+    "Suggestions",
+    "Already saved",
+    "All names",
+)
+PAGE_SIZE_OPTIONS = (10, 20, 50, 100)
+_FILTER_STATUSES = {
+    "Needs review": {"new", "suggested"},
+    "New names": {"new"},
+    "Suggestions": {"suggested"},
+    "Already saved": {"saved"},
+    "All names": {"new", "suggested", "saved"},
+}
+
+
+@dataclass(frozen=True)
+class PaginatedRows:
+    rows: list[AliasReviewRow]
+    page: int
+    total_pages: int
+    start: int
+    end: int
+    total_rows: int
 
 
 def alias_widget_token(
@@ -39,6 +68,10 @@ def reset_alias_editor_state(state: MutableMapping[str, object]) -> None:
     """Remove alias-editor widget values at a new processing boundary."""
     exact_keys = {
         "alias_search",
+        "alias_status_filter",
+        "alias_page_size",
+        "alias_page",
+        "alias_edits",
         "alias_admin_password",
         "save_aliases",
         "_alias_save_password_attempt",
@@ -48,6 +81,8 @@ def reset_alias_editor_state(state: MutableMapping[str, object]) -> None:
             key in exact_keys
             or key.startswith("alias_final_")
             or key.startswith("accept_alias_")
+            or key.startswith("alias_previous_")
+            or key.startswith("alias_next_")
         ):
             del state[key]
 
@@ -117,6 +152,53 @@ def visible_review_rows(
     ]
 
 
+def filter_review_rows(
+    rows: list[AliasReviewRow],
+    status_filter: str,
+    query: str,
+    final_names: dict[str, str] | None = None,
+) -> list[AliasReviewRow]:
+    """Apply the selected status filter, then search the current values."""
+    try:
+        statuses = _FILTER_STATUSES[status_filter]
+    except KeyError:
+        raise ValueError(f"Unknown alias filter: {status_filter}") from None
+    filtered = [row for row in rows if row.status in statuses]
+    needle = query.strip().casefold()
+    if not needle:
+        return filtered
+    current = final_names or {}
+    return [
+        row
+        for row in filtered
+        if needle in row.cleaned_name.casefold()
+        or needle in current.get(row.cleaned_name, row.final_name).casefold()
+    ]
+
+
+def paginate_review_rows(
+    rows: list[AliasReviewRow], page: int, page_size: int
+) -> PaginatedRows:
+    """Return one clamped page and its one-based display range."""
+    if page_size not in PAGE_SIZE_OPTIONS:
+        raise ValueError(f"Unsupported alias page size: {page_size}")
+    total_rows = len(rows)
+    if total_rows == 0:
+        return PaginatedRows([], 1, 0, 0, 0, 0)
+    total_pages = math.ceil(total_rows / page_size)
+    clamped_page = min(max(int(page), 1), total_pages)
+    offset = (clamped_page - 1) * page_size
+    page_rows = rows[offset : offset + page_size]
+    return PaginatedRows(
+        page_rows,
+        clamped_page,
+        total_pages,
+        offset + 1,
+        offset + len(page_rows),
+        total_rows,
+    )
+
+
 def edited_final_names(
     rows: list[AliasReviewRow], edits: dict[str, str]
 ) -> dict[str, str]:
@@ -134,8 +216,47 @@ def validate_save_password(candidate: object, configured: object) -> str | None:
     return None
 
 
-def _accept_suggestion(widget_key: str, canonical_name: str) -> None:
+def _store_alias_edit(cleaned_name: str, widget_key: str) -> None:
+    edits = dict(st.session_state.get("alias_edits", {}))
+    edits[cleaned_name] = st.session_state.get(widget_key, "")
+    st.session_state["alias_edits"] = edits
+
+
+def _accept_suggestion(
+    cleaned_name: str, widget_key: str, canonical_name: str
+) -> None:
     st.session_state[widget_key] = canonical_name
+    edits = dict(st.session_state.get("alias_edits", {}))
+    edits[cleaned_name] = canonical_name
+    st.session_state["alias_edits"] = edits
+
+
+def _reset_alias_page() -> None:
+    st.session_state["alias_page"] = 1
+
+
+def _move_alias_page(delta: int, total_pages: int) -> None:
+    current = int(st.session_state.get("alias_page", 1))
+    st.session_state["alias_page"] = min(max(current + delta, 1), total_pages)
+
+
+def _render_page_controls(page: PaginatedRows, location: str) -> None:
+    previous, label, following = st.columns((1, 2, 1))
+    previous.button(
+        "Previous",
+        key=f"alias_previous_{location}",
+        disabled=page.page <= 1,
+        on_click=_move_alias_page,
+        args=(-1, page.total_pages),
+    )
+    label.markdown(f"Page {page.page} of {page.total_pages}")
+    following.button(
+        "Next",
+        key=f"alias_next_{location}",
+        disabled=page.page >= page.total_pages,
+        on_click=_move_alias_page,
+        args=(1, page.total_pages),
+    )
 
 
 def render_alias_editor(
@@ -145,13 +266,61 @@ def render_alias_editor(
 ) -> pd.DataFrame | None:
     """Render mappings for the current report and return totals after a save."""
     st.subheader("Company name mappings")
-    query = st.text_input("Search current rows", key="alias_search")
-
-    for row in visible_review_rows(prepared.review_rows, query):
+    stored_edits = dict(st.session_state.get("alias_edits", {}))
+    for row in prepared.review_rows:
+        stored_edits.setdefault(row.cleaned_name, row.final_name)
         widget_token = alias_widget_token(row.cleaned_name, prepared.review_rows)
         final_key = f"alias_final_{widget_token}"
         if final_key not in st.session_state:
-            st.session_state[final_key] = row.final_name
+            st.session_state[final_key] = stored_edits[row.cleaned_name]
+    st.session_state["alias_edits"] = stored_edits
+
+    counts = {
+        option: sum(
+            row.status in _FILTER_STATUSES[option] for row in prepared.review_rows
+        )
+        for option in ALIAS_FILTER_OPTIONS
+    }
+    filter_column, search_column = st.columns((2, 3))
+    status_filter = filter_column.selectbox(
+        "Show",
+        ALIAS_FILTER_OPTIONS,
+        key="alias_status_filter",
+        format_func=lambda option: f"{option} ({counts[option]})",
+        on_change=_reset_alias_page,
+    )
+    query = search_column.text_input(
+        "Search current rows", key="alias_search", on_change=_reset_alias_page
+    )
+    page_size = st.selectbox(
+        "Rows per page",
+        PAGE_SIZE_OPTIONS,
+        index=1,
+        key="alias_page_size",
+        on_change=_reset_alias_page,
+    )
+    if "alias_page" not in st.session_state:
+        st.session_state["alias_page"] = 1
+
+    current_final_names = dict(st.session_state["alias_edits"])
+    filtered_rows = filter_review_rows(
+        prepared.review_rows, status_filter, query, current_final_names
+    )
+    page = paginate_review_rows(
+        filtered_rows, int(st.session_state["alias_page"]), int(page_size)
+    )
+    st.session_state["alias_page"] = page.page
+
+    if page.total_rows:
+        st.caption(f"Showing {page.start}–{page.end} of {page.total_rows}")
+        if page.total_pages > 1:
+            _render_page_controls(page, "top")
+    else:
+        st.info("No company names match this view. Choose another filter or search.")
+
+    for row in page.rows:
+        widget_token = alias_widget_token(row.cleaned_name, prepared.review_rows)
+        final_key = f"alias_final_{widget_token}"
 
         name_column, final_column, status_column = st.columns((2, 3, 1))
         name_column.markdown(row.cleaned_name)
@@ -159,6 +328,8 @@ def render_alias_editor(
             f"Final company name for {row.cleaned_name}",
             key=final_key,
             label_visibility="collapsed",
+            on_change=_store_alias_edit,
+            args=(row.cleaned_name, final_key),
         )
         status_column.markdown(row.status.title())
 
@@ -171,16 +342,13 @@ def render_alias_editor(
                 "Use this suggestion",
                 key=f"accept_alias_{widget_token}",
                 on_click=_accept_suggestion,
-                args=(final_key, row.suggestion.canonical_name),
+                args=(row.cleaned_name, final_key, row.suggestion.canonical_name),
             )
 
-    edits = {
-        row.cleaned_name: st.session_state.get(
-            f"alias_final_{alias_widget_token(row.cleaned_name, prepared.review_rows)}",
-            row.final_name,
-        )
-        for row in prepared.review_rows
-    }
+    if page.total_pages > 1:
+        _render_page_controls(page, "bottom")
+
+    edits = dict(st.session_state["alias_edits"])
     save_disabled = (
         not prepared.database_available
         or repository is None
