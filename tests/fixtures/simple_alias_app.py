@@ -38,7 +38,7 @@ prepared = prepare_aliases(pd.DataFrame([
     {"agent_name": "HKTRM", "rns": 2, "revenue": 100},
     {"agent_name": "HKTRMs", "rns": 3, "revenue": 50},
 ]), repository)
-result = render_alias_editor(prepared, repository, "correct")
+result = render_alias_editor(prepared, repository)
 if result is not None:
     st.session_state["fixture_result"] = result
     st.dataframe(result)

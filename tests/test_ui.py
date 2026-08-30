@@ -12,8 +12,6 @@ from company_names.ui import (
     paginate_review_rows,
     reconcile_alias_report_scope,
     reset_alias_editor_state,
-    stage_save_password_attempt,
-    validate_save_password,
     visible_review_rows,
 )
 
@@ -39,6 +37,7 @@ def test_ui_contains_plain_mapping_copy_and_no_group_board_copy() -> None:
     assert "Working tray" not in source
     assert "Combined groups" not in source
     assert "Prepare mapping backup" not in source
+    assert "Admin password" not in source
 
 
 def test_search_filters_current_report_rows_case_insensitively() -> None:
@@ -51,11 +50,6 @@ def test_suggestion_is_not_applied_until_explicit_accept() -> None:
     values = edited_final_names(ROWS, {})
 
     assert values["HKTRMs"] == "HKTRMs"
-
-
-def test_save_password_validation_is_explicit() -> None:
-    assert validate_save_password("wrong", "correct") == "Incorrect admin password"
-    assert validate_save_password("correct", "correct") is None
 
 
 def test_widget_token_preserves_plain_alias_key_when_it_is_unique() -> None:
@@ -94,7 +88,6 @@ def test_reset_clears_all_alias_editor_widget_state() -> None:
         f"alias_final_{alias_widget_token('A&B', collisions)}": "stale one",
         f"alias_final_{alias_widget_token('A B', collisions)}": "stale two",
         f"accept_alias_{alias_widget_token('A&B', collisions)}": True,
-        "alias_admin_password": "secret",
         "save_aliases": True,
         "unrelated": "keep",
     }
@@ -154,15 +147,6 @@ def test_mode_change_clears_state_even_with_same_supplied_fingerprint() -> None:
     assert reconcile_alias_report_scope(state, False, "same") is False
 
     assert state == {}
-
-
-def test_save_attempt_stages_and_immediately_clears_password() -> None:
-    state = {"alias_admin_password": "secret"}
-
-    stage_save_password_attempt(state)
-
-    assert state["alias_admin_password"] == ""
-    assert state["_alias_save_password_attempt"] == "secret"
 
 
 def test_final_name_inputs_have_row_specific_labels() -> None:

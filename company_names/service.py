@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hmac
 import math
 from typing import Literal
 
@@ -38,13 +37,6 @@ class PreparedAliases:
     review_rows: list[AliasReviewRow]
     database_available: bool
     database_error: str | None
-
-
-def password_matches(candidate: object, expected: object) -> bool:
-    """Compare configured administrator credentials."""
-    if not isinstance(candidate, str) or not isinstance(expected, str):
-        return False
-    return hmac.compare_digest(candidate, expected)
 
 
 def normalize_extracted_rows(rows: pd.DataFrame) -> pd.DataFrame:

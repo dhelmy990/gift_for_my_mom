@@ -16,7 +16,6 @@ from .service import (
     AliasReviewRow,
     PreparedAliases,
     ServiceValidationError,
-    password_matches,
     save_alias_changes,
 )
 
@@ -72,9 +71,7 @@ def reset_alias_editor_state(state: MutableMapping[str, object]) -> None:
         "alias_page_size",
         "alias_page",
         "alias_edits",
-        "alias_admin_password",
         "save_aliases",
-        "_alias_save_password_attempt",
     }
     for key in list(state):
         if (
@@ -130,12 +127,6 @@ def reconcile_alias_report_scope(
                 state.pop(value_key, None)
                 state.pop(fingerprint_key, None)
     return scope_matches
-
-
-def stage_save_password_attempt(state: MutableMapping[str, object]) -> None:
-    """Capture a password for this save rerun and clear the visible widget."""
-    state["_alias_save_password_attempt"] = state.get("alias_admin_password", "")
-    state["alias_admin_password"] = ""
 
 
 def visible_review_rows(
@@ -209,13 +200,6 @@ def edited_final_names(
     }
 
 
-def validate_save_password(candidate: object, configured: object) -> str | None:
-    """Return a user-facing password error, or ``None`` when authorized."""
-    if not password_matches(candidate, configured):
-        return "Incorrect admin password"
-    return None
-
-
 def _store_alias_edit(cleaned_name: str, widget_key: str) -> None:
     edits = dict(st.session_state.get("alias_edits", {}))
     edits[cleaned_name] = st.session_state.get(widget_key, "")
@@ -262,7 +246,6 @@ def _render_page_controls(page: PaginatedRows, location: str) -> None:
 def render_alias_editor(
     prepared: PreparedAliases,
     repository: AliasRepository | None,
-    configured_admin_password: str | None,
 ) -> pd.DataFrame | None:
     """Render mappings for the current report and return totals after a save."""
     st.subheader("Company name mappings")
@@ -352,43 +335,21 @@ def render_alias_editor(
     save_disabled = (
         not prepared.database_available
         or repository is None
-        or not configured_admin_password
     )
-    password_column, save_column = st.columns((2, 3))
-    candidate = password_column.text_input(
-        "Admin password",
-        type="password",
-        key="alias_admin_password",
-        disabled=save_disabled,
-    )
-    save_requested = save_column.button(
+    save_requested = st.button(
         "Save all changes and update totals",
         key="save_aliases",
         disabled=save_disabled,
-        on_click=stage_save_password_attempt,
-        args=(st.session_state,),
     )
 
     if prepared.database_error:
         st.error(prepared.database_error)
     elif repository is None:
         st.info("Company alias storage is unavailable")
-    elif not configured_admin_password:
-        st.info("Admin password is not configured")
-
     if not save_requested:
         return None
 
-    attempted_password = st.session_state.pop(
-        "_alias_save_password_attempt", candidate
-    )
     try:
-        password_error = validate_save_password(
-            attempted_password, configured_admin_password
-        )
-        if password_error is not None:
-            st.error(password_error)
-            return None
         return save_alias_changes(
             prepared,
             edited_final_names(prepared.review_rows, edits),
@@ -397,5 +358,3 @@ def render_alias_editor(
     except (RepositoryUnavailableError, ServiceValidationError) as error:
         st.error(str(error))
         return None
-    finally:
-        st.session_state.pop("_alias_save_password_attempt", None)

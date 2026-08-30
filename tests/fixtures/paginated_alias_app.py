@@ -29,4 +29,4 @@ prepared = prepare_aliases(
     ]),
     repository,
 )
-render_alias_editor(prepared, repository, "correct")
+render_alias_editor(prepared, repository)

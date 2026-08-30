@@ -50,7 +50,7 @@ In **Project Settings**, open **API** or **Data API** and copy:
 - the server-side `service_role` or secret key, not the public `anon` or publishable
   key.
 
-Choose a separate, high-entropy admin password for approving alias changes. In
+Choose a separate, high-entropy password for logging in to the entire app. In
 Streamlit Community Cloud, deploy `app.py` from `main`, open **Advanced settings**,
 and add exactly these three secrets:
 
@@ -115,8 +115,8 @@ confirmed the import succeeded and accept that deleting the local file is irreve
 4. For an unmatched but similar name, confirm the app may show a RapidFuzz suggestion.
    The suggestion is optional and changes nothing until **Use this suggestion** is
    selected or the final name is edited manually.
-5. Review every final company name, enter `ADMIN_PASSWORD`, and select
-   **Save all changes and update totals**.
+5. Log in with `ADMIN_PASSWORD`, review every final company name, and select
+   **Save all changes and update totals**. No second password prompt appears when saving.
 6. Confirm room nights and revenue are summed under the chosen final company names.
 7. Reboot the app, process the same report again, and confirm saved exact aliases are
    restored from Supabase.
@@ -129,14 +129,14 @@ confirmed the import succeeded and accept that deleting the local file is irreve
   Streamlit after rotating it.
 - **Table missing:** run the complete current `supabase/schema.sql` file and inspect
   the first SQL Editor error.
-- **Admin password rejected:** it is case-sensitive and must match `ADMIN_PASSWORD`.
+- **Login password rejected:** it is case-sensitive and must match `ADMIN_PASSWORD`.
 - **No fuzzy suggestion:** suggestions are deliberately conservative and optional;
   enter the final name manually. Exact saved aliases remain authoritative.
 
 ## Security checklist
 
 - Never expose or commit `.streamlit/secrets.toml` or the service-role key.
-- Use a separate high-entropy admin password and rotate exposed credentials.
+- Use a separate high-entropy login password and rotate exposed credentials.
 - Restrict access to the deployed app when appropriate. Password checks in the app
   are not a substitute for hosting- or proxy-level access controls.
 - Back up the Supabase project before any manual destructive database maintenance.

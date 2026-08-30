@@ -14,6 +14,14 @@ def test_app_uses_alias_pipeline_without_embeddings_or_groups() -> None:
     assert "ReviewBoard" not in source
 
 
+def test_app_requires_login_before_rendering_upload_controls() -> None:
+    source = Path("app.py").read_text()
+
+    assert "render_login_gate" in source
+    assert source.index("render_login_gate") < source.index("st.file_uploader")
+    assert "Log out" in source
+
+
 def test_runtime_has_no_obsolete_module_imports() -> None:
     runtime = "\n".join(
         path.read_text()

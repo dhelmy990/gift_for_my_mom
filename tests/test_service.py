@@ -10,7 +10,6 @@ from company_names.service import (
     aggregate_resolved_rows,
     collate_extracted_rows,
     normalize_extracted_rows,
-    password_matches,
     prepare_aliases,
     save_alias_changes,
 )
@@ -303,9 +302,3 @@ def test_invalid_or_incomplete_final_name_is_rejected_before_write(final_names) 
     with pytest.raises(ServiceValidationError, match="final company name"):
         save_alias_changes(prepared, final_names, repository)
     assert repository.saved == []
-
-
-def test_password_matches_only_strings() -> None:
-    assert password_matches("secret", "secret") is True
-    assert password_matches("wrong", "secret") is False
-    assert password_matches(None, None) is False

@@ -8,6 +8,7 @@ import hashlib
 import pandas as pd
 import streamlit as st
 
+from company_names.auth import authenticate, is_authenticated, log_out
 from company_names.repository import RepositoryUnavailableError, SupabaseAliasRepository
 from company_names.service import (
     PreparedAliases,
@@ -47,6 +48,31 @@ def _secret(name: str) -> str | None:
     except Exception:
         return None
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _log_out() -> None:
+    log_out(st.session_state)
+
+
+def render_login_gate(configured_password: str | None) -> bool:
+    """Render the password-only login page and gate the entire application."""
+    if is_authenticated(st.session_state, configured_password):
+        st.sidebar.button("Log out", key="log_out", on_click=_log_out)
+        return True
+
+    st.title("Company Report Plumber")
+    if not configured_password:
+        st.error("App login is not configured. Add ADMIN_PASSWORD to Streamlit secrets.")
+        return False
+
+    with st.form("login_form", clear_on_submit=True):
+        candidate = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Log in")
+    if submitted:
+        if authenticate(st.session_state, candidate, configured_password):
+            st.rerun()
+        st.error("Incorrect password")
+    return False
 
 
 def _add_custom_excluded_agent() -> None:
@@ -146,6 +172,8 @@ def _initial_alias_aggregate(prepared: PreparedAliases) -> pd.DataFrame:
 
 
 def main() -> None:
+    if not render_login_gate(_secret("ADMIN_PASSWORD")):
+        return
     st.title("PDF Room Data Extractor")
     uploaded_files = st.file_uploader(
         "Upload PDF files", type="pdf", accept_multiple_files=True
@@ -239,7 +267,6 @@ def main() -> None:
         result = render_alias_editor(
             prepared,
             repository,
-            _secret("ADMIN_PASSWORD"),
         )
         if result is not None:
             st.session_state["current_alias_aggregate"] = result
