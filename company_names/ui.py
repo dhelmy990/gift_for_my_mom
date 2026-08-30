@@ -19,9 +19,18 @@ from .service import (
 )
 
 
-def alias_widget_token(cleaned_name: str) -> str:
-    """Return a deterministic token unique to the exact cleaned name."""
+def alias_widget_token(
+    cleaned_name: str, rows: list[AliasReviewRow]
+) -> str:
+    """Return the plain alias key unless current rows make it ambiguous."""
     alias_key = normalize_lookup_key(cleaned_name)
+    colliding_names = {
+        row.cleaned_name
+        for row in rows
+        if normalize_lookup_key(row.cleaned_name) == alias_key
+    }
+    if len(colliding_names) <= 1:
+        return alias_key
     digest = hashlib.sha256(cleaned_name.encode("utf-8")).hexdigest()[:8]
     return f"{alias_key}_{digest}"
 
@@ -94,7 +103,7 @@ def render_alias_editor(
     query = st.text_input("Search current rows", key="alias_search")
 
     for row in visible_review_rows(prepared.review_rows, query):
-        widget_token = alias_widget_token(row.cleaned_name)
+        widget_token = alias_widget_token(row.cleaned_name, prepared.review_rows)
         final_key = f"alias_final_{widget_token}"
         if final_key not in st.session_state:
             st.session_state[final_key] = row.final_name
@@ -122,7 +131,8 @@ def render_alias_editor(
 
     edits = {
         row.cleaned_name: st.session_state.get(
-            f"alias_final_{alias_widget_token(row.cleaned_name)}", row.final_name
+            f"alias_final_{alias_widget_token(row.cleaned_name, prepared.review_rows)}",
+            row.final_name,
         )
         for row in prepared.review_rows
     }

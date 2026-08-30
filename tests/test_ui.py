@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from company_names.aliases import AliasSuggestion
+from company_names.cleaning import normalize_lookup_key
 from company_names.service import AliasReviewRow
 from company_names.ui import (
     alias_widget_token,
@@ -52,17 +53,36 @@ def test_save_password_validation_is_explicit() -> None:
     assert validate_save_password("correct", "correct") is None
 
 
-def test_widget_tokens_distinguish_cleaned_names_with_the_same_alias_key() -> None:
-    assert alias_widget_token("A&B") != alias_widget_token("A B")
-    assert alias_widget_token("A&B") == alias_widget_token("A&B")
+def test_widget_token_preserves_plain_alias_key_when_it_is_unique() -> None:
+    assert alias_widget_token("HKTRMs", ROWS) == "hktrms"
+
+
+def test_widget_tokens_suffix_colliding_alias_keys_deterministically() -> None:
+    collisions = [
+        AliasReviewRow("A&B", "A&B", "new", None),
+        AliasReviewRow("A B", "A B", "new", None),
+    ]
+
+    first = alias_widget_token("A&B", collisions)
+    second = alias_widget_token("A B", collisions)
+
+    expected_prefix = f"{normalize_lookup_key('A&B')}_"
+    assert first.startswith(expected_prefix)
+    assert second.startswith(expected_prefix)
+    assert first != second
+    assert alias_widget_token("A&B", collisions) == first
 
 
 def test_reset_clears_all_alias_editor_widget_state() -> None:
+    collisions = [
+        AliasReviewRow("A&B", "A&B", "new", None),
+        AliasReviewRow("A B", "A B", "new", None),
+    ]
     state = {
         "alias_search": "A",
-        f"alias_final_{alias_widget_token('A&B')}": "stale one",
-        f"alias_final_{alias_widget_token('A B')}": "stale two",
-        f"accept_alias_{alias_widget_token('A&B')}": True,
+        f"alias_final_{alias_widget_token('A&B', collisions)}": "stale one",
+        f"alias_final_{alias_widget_token('A B', collisions)}": "stale two",
+        f"accept_alias_{alias_widget_token('A&B', collisions)}": True,
         "alias_admin_password": "secret",
         "save_aliases": True,
         "unrelated": "keep",
