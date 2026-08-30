@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import MutableMapping
+
 import pandas as pd
 import streamlit as st
 
@@ -14,6 +17,36 @@ from .service import (
     password_matches,
     save_alias_changes,
 )
+
+
+def alias_widget_token(cleaned_name: str) -> str:
+    """Return a deterministic token unique to the exact cleaned name."""
+    alias_key = normalize_lookup_key(cleaned_name)
+    digest = hashlib.sha256(cleaned_name.encode("utf-8")).hexdigest()[:8]
+    return f"{alias_key}_{digest}"
+
+
+def reset_alias_editor_state(state: MutableMapping[str, object]) -> None:
+    """Remove alias-editor widget values at a new processing boundary."""
+    exact_keys = {
+        "alias_search",
+        "alias_admin_password",
+        "save_aliases",
+        "_alias_save_password_attempt",
+    }
+    for key in list(state):
+        if (
+            key in exact_keys
+            or key.startswith("alias_final_")
+            or key.startswith("accept_alias_")
+        ):
+            del state[key]
+
+
+def stage_save_password_attempt(state: MutableMapping[str, object]) -> None:
+    """Capture a password for this save rerun and clear the visible widget."""
+    state["_alias_save_password_attempt"] = state.get("alias_admin_password", "")
+    state["alias_admin_password"] = ""
 
 
 def visible_review_rows(
@@ -61,15 +94,15 @@ def render_alias_editor(
     query = st.text_input("Search current rows", key="alias_search")
 
     for row in visible_review_rows(prepared.review_rows, query):
-        alias_key = normalize_lookup_key(row.cleaned_name)
-        final_key = f"alias_final_{alias_key}"
+        widget_token = alias_widget_token(row.cleaned_name)
+        final_key = f"alias_final_{widget_token}"
         if final_key not in st.session_state:
             st.session_state[final_key] = row.final_name
 
         name_column, final_column, status_column = st.columns((2, 3, 1))
         name_column.markdown(row.cleaned_name)
         final_column.text_input(
-            "Final company name",
+            f"Final company name for {row.cleaned_name}",
             key=final_key,
             label_visibility="collapsed",
         )
@@ -82,14 +115,14 @@ def render_alias_editor(
             )
             st.button(
                 "Use this suggestion",
-                key=f"accept_alias_{alias_key}",
+                key=f"accept_alias_{widget_token}",
                 on_click=_accept_suggestion,
                 args=(final_key, row.suggestion.canonical_name),
             )
 
     edits = {
         row.cleaned_name: st.session_state.get(
-            f"alias_final_{normalize_lookup_key(row.cleaned_name)}", row.final_name
+            f"alias_final_{alias_widget_token(row.cleaned_name)}", row.final_name
         )
         for row in prepared.review_rows
     }
@@ -109,6 +142,8 @@ def render_alias_editor(
         "Save all changes and update totals",
         key="save_aliases",
         disabled=save_disabled,
+        on_click=stage_save_password_attempt,
+        args=(st.session_state,),
     )
 
     if prepared.database_error:
@@ -121,12 +156,16 @@ def render_alias_editor(
     if not save_requested:
         return None
 
-    password_error = validate_save_password(candidate, configured_admin_password)
-    if password_error is not None:
-        st.error(password_error)
-        return None
-
+    attempted_password = st.session_state.pop(
+        "_alias_save_password_attempt", candidate
+    )
     try:
+        password_error = validate_save_password(
+            attempted_password, configured_admin_password
+        )
+        if password_error is not None:
+            st.error(password_error)
+            return None
         return save_alias_changes(
             prepared,
             edited_final_names(prepared.review_rows, edits),
@@ -135,3 +174,5 @@ def render_alias_editor(
     except (RepositoryUnavailableError, ServiceValidationError) as error:
         st.error(str(error))
         return None
+    finally:
+        st.session_state.pop("_alias_save_password_attempt", None)
