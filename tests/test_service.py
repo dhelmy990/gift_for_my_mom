@@ -1,122 +1,103 @@
+from dataclasses import FrozenInstanceError
+
 import pandas as pd
 import pytest
 
-from company_names.matching import Candidate
-from company_names.models import Group, NameRecord, ReviewBoard
-from company_names.repository import (
-    ExactMapping,
-    GroupRecord,
-    RepositoryUnavailableError,
-)
-from company_names.review import singleton_group_id
+from company_names.repository import AliasMapping, RepositoryUnavailableError
 from company_names.service import (
-    PreparedReview,
+    AliasReviewRow,
     ServiceValidationError,
-    _prepare_submission_payload,
+    aggregate_resolved_rows,
     collate_extracted_rows,
     normalize_extracted_rows,
-    prepare_review,
-    submit_prepared_review,
-    submit_review,
-    submit_review_authorized,
+    password_matches,
+    prepare_aliases,
+    save_alias_changes,
 )
 
 
-class FakeRepository:
-    def __init__(self, *, exact=None, candidates=None, groups=None):
-        self.exact = exact or {}
-        self.candidates = candidates or []
-        self.groups = groups or []
-        self.candidate_calls = 0
-        self.submissions = []
+class FakeAliasRepository:
+    def __init__(self, aliases: list[AliasMapping]) -> None:
+        self.aliases = aliases
+        self.saved: list[AliasMapping] = []
 
-    def get_exact_mappings(self, names):
-        return {name: self.exact[name] for name in names if name in self.exact}
+    def list_aliases(self) -> list[AliasMapping]:
+        return list(self.aliases)
 
-    def list_candidates(self):
-        self.candidate_calls += 1
-        return self.candidates
-
-    def list_groups(self):
-        return self.groups
-
-    def submit(self, payload):
-        self.submissions.append(payload)
-        return {"temp": "11111111-1111-4111-8111-111111111111"}
+    def upsert_aliases(self, mappings: list[AliasMapping]) -> None:
+        self.saved.extend(mappings)
 
 
-class FakeEmbedder:
-    def __init__(self, *, fail=False):
-        self.fail = fail
-        self.calls = []
+class FailingAliasRepository(FakeAliasRepository):
+    def __init__(self, message: str) -> None:
+        super().__init__([])
+        self.message = message
 
-    def embed(self, texts):
-        self.calls.append(texts)
-        if self.fail:
-            raise RuntimeError("model unavailable")
-        return [[float(index + 1)] * 384 for index, _ in enumerate(texts)]
+    def list_aliases(self) -> list[AliasMapping]:
+        raise RepositoryUnavailableError(self.message)
 
 
-def extracted_rows():
-    return pd.DataFrame(
-        {
-            "TRAVEL AGENT": ["Acme Pte Ltd", "Acme", "Unknown Co Ltd"],
-            "Sum of RNS": [1, 2.5, 4],
-            "Sum of R REVENUE": [10.25, 20, 40],
-        }
-    )
+def extracted_rows(values=None) -> pd.DataFrame:
+    values = values or [
+        ("Acme Pte Ltd", 1, 10.25),
+        ("Acme", 2.5, 20),
+        ("Unknown Co Ltd", 4, 40),
+    ]
+    return pd.DataFrame(values, columns=[
+        "TRAVEL AGENT", "Sum of RNS", "Sum of R REVENUE"
+    ])
 
 
-def test_normalize_cleans_and_sums_duplicate_names_as_floats():
-    result = normalize_extracted_rows(extracted_rows())
-
-    assert result.to_dict("records") == [
+def test_normalize_cleans_and_sums_duplicate_names_as_floats() -> None:
+    assert normalize_extracted_rows(extracted_rows()).to_dict("records") == [
         {"cleaned_name": "Acme", "rns": 3.5, "revenue": 30.25},
         {"cleaned_name": "Unknown", "rns": 4.0, "revenue": 40.0},
     ]
 
 
-def test_collate_extracted_rows_groups_agent_column_not_dataframe_indexes():
-    first = pd.DataFrame(
-        [{"TRAVEL AGENT": "Acme", "Sum of RNS": 2, "Sum of R REVENUE": 10}]
-    )
-    second = pd.DataFrame(
-        [{"TRAVEL AGENT": "Acme", "Sum of RNS": 3, "Sum of R REVENUE": 20}]
-    )
-
-    result = collate_extracted_rows([first, second])
-
+@pytest.mark.parametrize(
+    ("columns", "values"),
+    [
+        (("agent_name", "rns", "revenue"), ("Acme", 2, 10)),
+        (("cleaned_name", "rns", "revenue"), ("Acme", 2, 10)),
+    ],
+)
+def test_normalize_accepts_alternate_column_sets(columns, values) -> None:
+    result = normalize_extracted_rows(pd.DataFrame([values], columns=columns))
     assert result.to_dict("records") == [
-        {
-            "TRAVEL AGENT": "Acme",
-            "Sum of RNS": 5.0,
-            "Sum of R REVENUE": 30.0,
-        }
+        {"cleaned_name": "Acme", "rns": 2.0, "revenue": 10.0}
+    ]
+
+
+def test_collate_extracted_rows_groups_agent_column_not_dataframe_indexes() -> None:
+    result = collate_extracted_rows([
+        extracted_rows([("Acme", 2, 10)]),
+        extracted_rows([("Acme", 3, 20)]),
+    ])
+    assert result.to_dict("records") == [{
+        "TRAVEL AGENT": "Acme",
+        "Sum of RNS": 5.0,
+        "Sum of R REVENUE": 30.0,
+    }]
+
+
+def test_collate_extracted_rows_returns_expected_empty_columns() -> None:
+    assert list(collate_extracted_rows([]).columns) == [
+        "TRAVEL AGENT", "Sum of RNS", "Sum of R REVENUE"
     ]
 
 
 @pytest.mark.parametrize("value", ["bad", float("nan"), float("inf")])
-def test_normalize_rejects_invalid_numeric_values(value):
-    rows = pd.DataFrame(
-        {"agent_name": ["Acme"], "rns": [value], "revenue": [1]}
-    )
+def test_normalize_rejects_invalid_numeric_values(value) -> None:
+    rows = pd.DataFrame({"agent_name": ["Acme"], "rns": [value], "revenue": [1]})
     with pytest.raises(ServiceValidationError, match="numeric"):
         normalize_extracted_rows(rows)
 
 
-def test_normalize_identifies_source_and_value_for_suffix_only_company_name():
-    rows = pd.DataFrame(
-        {
-            "TRAVEL AGENT": ["Pte Ltd"],
-            "Sum of RNS": [2],
-            "Sum of R REVENUE": [10],
-            "_source_file": ["hotel-report.pdf"],
-        }
-    )
-
+def test_normalize_identifies_source_and_value_for_suffix_only_company_name() -> None:
+    rows = extracted_rows([("Pte Ltd", 2, 10)]).assign(_source_file="hotel-report.pdf")
     with pytest.raises(ServiceValidationError) as caught:
         normalize_extracted_rows(rows)
-
     message = str(caught.value)
     assert "Row 1" in message
     assert "hotel-report.pdf" in message
@@ -124,331 +105,132 @@ def test_normalize_identifies_source_and_value_for_suffix_only_company_name():
     assert "empty after cleanup" in message
 
 
-def test_prepare_places_exact_names_and_leaves_unknown_suggestions_separate():
-    repo = FakeRepository(
-        exact={"Acme": ExactMapping("g1", "Acme Group", "Acme", None)},
-        candidates=[Candidate("g1", "Acme Group", "Acme", tuple([1.0] * 384))],
-        groups=[GroupRecord("g1", "Acme Group", None)],
-    )
-    embedder = FakeEmbedder()
-
-    prepared = prepare_review(extracted_rows(), repo, embedder)
-
-    assert prepared.board.groups == {"g1": Group("g1", "Acme Group", True)}
-    assert prepared.board.names["Acme"] == NameRecord(
-        "Acme", "g1", "exact", selected=True, persisted_name="Acme"
-    )
-    assert prepared.board.names["Unknown"] == NameRecord(
-        "Unknown", None, "suggested", selected=False
-    )
-    assert prepared.suggestions["Unknown"][0].group_id == "g1"
-    assert prepared.original_mappings == {"Acme": "g1"}
-    assert embedder.calls == [["Unknown"]]
-
-
-def test_prepare_keeps_report_identity_separate_from_persisted_exact_alias():
-    repo = FakeRepository(
-        exact={
-            "Miki Travel": ExactMapping("g1", "Miki", "Miki-Travel", None)
-        },
-        groups=[GroupRecord("g1", "Miki", None)],
-    )
-    rows = pd.DataFrame(
-        {"agent_name": ["Miki Travel"], "rns": [2], "revenue": [8]}
-    )
-
-    prepared = prepare_review(rows, repo, FakeEmbedder())
-
-    assert list(prepared.board.names) == ["Miki Travel"]
-    assert prepared.board.names["Miki Travel"].persisted_name == "Miki-Travel"
-
-
-def test_prepare_uses_only_repository_candidates_not_provisional_board_groups():
-    repo = FakeRepository(candidates=[])
-    prepared = prepare_review(extracted_rows().iloc[[2]], repo, FakeEmbedder())
-
-    prepared.board.groups["temporary"] = Group("temporary", "Unknown", False)
-    assert repo.candidate_calls == 1
-    assert prepared.suggestions["Unknown"] == []
-    assert prepared.board.names["Unknown"].source == "unknown"
-
-
-def test_prepare_falls_back_to_fuzzy_suggestions_when_embedding_fails():
-    repo = FakeRepository(
-        candidates=[Candidate("g1", "Unknown Travel", "Unknown Travel", None)]
-    )
-    prepared = prepare_review(extracted_rows().iloc[[2]], repo, FakeEmbedder(fail=True))
-
-    assert prepared.suggestions["Unknown"][0].group_id == "g1"
-    assert prepared.warnings
-    assert "embedding" in prepared.warnings[0].lower()
-
-
-def test_prepare_ranks_group_by_title_embedding_over_opposing_member_embedding():
-    aligned = tuple([1.0] * 384)
-    opposing = tuple([-1.0] * 384)
-    repo = FakeRepository(
-        candidates=[
-            Candidate("g1", "Northstar Voyages", "Northstar Voyages", aligned),
-            Candidate("g1", "Northstar Voyages", "Unrelated Member", opposing),
-            Candidate("g2", "Other Group", "Other Member", tuple([0.0] * 384)),
-        ],
-        groups=[
-            GroupRecord("g1", "Northstar Voyages", aligned),
-            GroupRecord("g2", "Other Group", None),
-        ],
-    )
-
-    prepared = prepare_review(
-        pd.DataFrame({"agent_name": ["Mystery Agency"], "rns": [1], "revenue": [1]}),
-        repo,
-        FakeEmbedder(),
-    )
-
-    assert prepared.suggestions["Mystery Agency"][0].group_id == "g1"
-    assert [suggestion.group_id for suggestion in prepared.suggestions["Mystery Agency"]].count("g1") == 1
-
-
-def test_prepare_suggests_empty_group_from_title_candidate_without_vector():
-    repo = FakeRepository(
-        candidates=[Candidate("g1", "Blue Horizon Travel", "Blue Horizon Travel", None)],
-        groups=[GroupRecord("g1", "Blue Horizon Travel", None)],
-    )
-
-    prepared = prepare_review(
-        pd.DataFrame({"agent_name": ["Blue Horizon"], "rns": [1], "revenue": [1]}),
-        repo,
-        FakeEmbedder(fail=True),
-    )
-
-    assert prepared.suggestions["Blue Horizon"][0].group_id == "g1"
-
-
-def test_prepare_batches_unknown_embeddings_and_preserves_order():
-    rows = pd.DataFrame({"agent_name": [f"Name {i} X" for i in range(257)], "rns": 1, "revenue": 1})
-    embedder = FakeEmbedder()
-    prepare_review(rows, FakeRepository(), embedder)
-    assert [len(call) for call in embedder.calls] == [128, 128, 1]
-    assert [name for call in embedder.calls for name in call] == [f"Name {i} X" for i in range(257)]
-
-
-def test_prepare_falls_back_for_invalid_embedding_dimension():
-    class BadEmbedder(FakeEmbedder):
-        def embed(self, texts):
-            self.calls.append(texts)
-            return [[1.0] for _ in texts]
-    prepared = prepare_review(extracted_rows().iloc[[2]], FakeRepository(), BadEmbedder())
-    assert prepared.warnings
-    assert prepared.suggestions["Unknown"] == []
-
-
-def test_submit_prepared_review_reuses_request_id_after_ambiguous_failure():
-    class AmbiguousRepository(FakeRepository):
-        def submit(self, payload):
-            self.submissions.append(payload)
-            if len(self.submissions) == 1:
-                raise RuntimeError("response lost")
-            return {}
-    prepared = prepare_review(extracted_rows().iloc[[2]], FakeRepository(), FakeEmbedder())
-    prepared.board.groups["temp"] = Group("temp", "Unknown", False)
-    prepared.board.names["Unknown"].group_id = "temp"
-    prepared.board.names["Unknown"].selected = True
-    repo = AmbiguousRepository()
-    with pytest.raises(RuntimeError, match="response lost"):
-        submit_prepared_review(prepared, repo, FakeEmbedder())
-    submit_prepared_review(prepared, repo, FakeEmbedder())
-    assert prepared.pending_request_id
-    assert [p.request_id for p in repo.submissions] == [prepared.pending_request_id] * 2
-
-
-def test_submit_review_rejects_unresolved_working_tray_before_repository_write():
-    review = ReviewBoard(
-        groups={},
-        names={"Alpha": NameRecord("Alpha", None, "unknown", selected=True)},
-    )
-    repo = FakeRepository()
-    request_id = "22222222-2222-4222-8222-222222222222"
-
-    with pytest.raises(ServiceValidationError, match="working tray"):
-        submit_review(review, {}, repo, FakeEmbedder(), request_id=request_id)
-
-    assert repo.submissions == []
-
-
-def test_submit_prepared_review_rejects_unresolved_tray_and_preserves_request_id():
-    prepared = PreparedReview(
-        board=ReviewBoard(
-            groups={},
-            names={"Alpha": NameRecord("Alpha", None, "unknown", selected=True)},
-        ),
-        original_mappings={},
-        suggestions={},
-        rows=pd.DataFrame(
-            [{"cleaned_name": "Alpha", "rns": 1.0, "revenue": 1.0}]
-        ),
-        warnings=[],
-        pending_request_id="22222222-2222-4222-8222-222222222222",
-    )
-    repo = FakeRepository()
-    request_id = prepared.pending_request_id
-
-    with pytest.raises(ServiceValidationError, match="working tray"):
-        submit_prepared_review(prepared, repo, FakeEmbedder())
-
-    assert repo.submissions == []
-    assert prepared.pending_request_id == request_id
-
-
-def test_normalize_rejects_nonfinite_grouped_totals():
-    rows = pd.DataFrame({"agent_name": ["Acme", "Acme Ltd"], "rns": [1e308, 1e308], "revenue": [1, 1]})
+def test_normalize_rejects_nonfinite_grouped_totals() -> None:
+    rows = pd.DataFrame({
+        "agent_name": ["Acme", "Acme Ltd"],
+        "rns": [1e308, 1e308],
+        "revenue": [1, 1],
+    })
     with pytest.raises(ServiceValidationError, match="aggregate"):
         normalize_extracted_rows(rows)
 
 
-def test_submit_embeds_only_changed_titles_and_members_in_one_batch_and_reuses_id():
-    board = ReviewBoard(
-        groups={
-            "old": Group("old", "Renamed", True),
-            "temp": Group("temp", "New Group", False),
-        },
-        names={
-            "Known": NameRecord("Known", "old", "exact", selected=True),
-            "New Alias": NameRecord("New Alias", "temp", "unknown", selected=True),
-        },
+def test_exact_alias_is_authoritative() -> None:
+    repository = FakeAliasRepository([
+        AliasMapping("HKTRM", "hktrm", "Hong Kong TUYI Business Travel Limited")
+    ])
+    prepared = prepare_aliases(extracted_rows([("HKTRM", 2, 100)]), repository)
+    assert prepared.review_rows == [AliasReviewRow(
+        "HKTRM", "Hong Kong TUYI Business Travel Limited", "saved", None
+    )]
+
+
+def test_exact_alias_uses_normalized_key() -> None:
+    repository = FakeAliasRepository([
+        AliasMapping("H K T R M", "h k t r m", "Canonical")
+    ])
+    prepared = prepare_aliases(extracted_rows([("h k t r m", 2, 100)]), repository)
+    assert prepared.review_rows[0].final_name == "Canonical"
+    assert prepared.review_rows[0].status == "saved"
+
+
+def test_unknown_name_defaults_to_cleaned_name_with_suggestion() -> None:
+    repository = FakeAliasRepository([
+        AliasMapping("HKTRM", "hktrm", "Hong Kong TUYI Business Travel Limited")
+    ])
+    prepared = prepare_aliases(
+        extracted_rows([("HKTRMs Pte Ltd", 2, 100)]), repository
     )
-    repo = FakeRepository(groups=[GroupRecord("old", "Old Title", None)])
-    embedder = FakeEmbedder()
-    request_id = "22222222-2222-4222-8222-222222222222"
+    row = prepared.review_rows[0]
+    assert row.cleaned_name == "HKTRMs"
+    assert row.final_name == "HKTRMs"
+    assert row.status == "suggested"
+    assert row.suggestion is not None
+    assert row.suggestion.canonical_name == "Hong Kong TUYI Business Travel Limited"
 
-    resolved = submit_review(
-        board, {"Known": "old"}, repo, embedder, request_id=request_id
+
+def test_unknown_without_suggestion_is_new() -> None:
+    prepared = prepare_aliases(
+        extracted_rows([("Miki Travel", 2, 100)]), FakeAliasRepository([])
     )
-
-    assert embedder.calls == [["Renamed", "New Group", "New Alias"]]
-    assert len(repo.submissions) == 1
-    payload = repo.submissions[0]
-    assert payload.request_id == request_id
-    assert payload.groups[0]["title_embedding"][0] == 1.0
-    assert payload.groups[1]["title_embedding"][0] == 2.0
-    assert "member_embedding" not in payload.mappings[0]
-    assert payload.mappings[1]["member_embedding"][0] == 3.0
-    assert resolved == {"temp": "11111111-1111-4111-8111-111111111111"}
+    assert prepared.review_rows == [AliasReviewRow(
+        "Miki Travel", "Miki Travel", "new", None
+    )]
 
 
-def test_submit_embeds_materialized_singleton_title_and_member() -> None:
-    review = ReviewBoard(
-        groups={},
-        names={"Alpha": NameRecord("Alpha", None, "unknown", selected=False)},
+def test_database_failure_keeps_cleaned_rows_available() -> None:
+    prepared = prepare_aliases(
+        extracted_rows([("Miki Travel Pte Ltd", 2, 100)]),
+        FailingAliasRepository("table missing"),
     )
-    repo = FakeRepository()
-    embedder = FakeEmbedder()
+    assert prepared.database_available is False
+    assert prepared.database_error == "table missing"
+    assert prepared.review_rows == [AliasReviewRow(
+        "Miki Travel", "Miki Travel", "new", None
+    )]
 
-    submit_review(
-        review,
-        {},
-        repo,
-        embedder,
-        request_id="22222222-2222-4222-8222-222222222222",
-        known_group_titles={},
+
+def test_no_repository_is_a_cleaned_database_unavailable_fallback() -> None:
+    prepared = prepare_aliases(extracted_rows([("Miki Travel", 2, 100)]), None)
+    assert prepared.database_available is False
+    assert prepared.database_error is None
+    assert prepared.review_rows[0].final_name == "Miki Travel"
+
+
+def test_alias_review_rows_are_frozen() -> None:
+    row = AliasReviewRow("Alias", "Final", "new", None)
+    with pytest.raises(FrozenInstanceError):
+        row.final_name = "Changed"  # type: ignore[misc]
+
+
+def test_resolved_names_combine_and_sum() -> None:
+    rows = pd.DataFrame([
+        {"cleaned_name": "HKTRM", "rns": 2.0, "revenue": 100.0},
+        {"cleaned_name": "HKTRMs", "rns": 3.5, "revenue": 50.25},
+    ])
+    result = aggregate_resolved_rows(rows, {
+        "HKTRM": "Hong Kong TUYI Business Travel Limited",
+        "HKTRMs": "Hong Kong TUYI Business Travel Limited",
+    })
+    assert result.to_dict("records") == [{
+        "TRAVEL AGENT": "Hong Kong TUYI Business Travel Limited",
+        "Sum of RNS": 5.5,
+        "Sum of R REVENUE": 150.25,
+    }]
+
+
+def test_aggregate_requires_complete_mapping() -> None:
+    rows = pd.DataFrame([{"cleaned_name": "HKTRM", "rns": 2.0, "revenue": 100.0}])
+    with pytest.raises(ServiceValidationError, match="Every cleaned company name"):
+        aggregate_resolved_rows(rows, {})
+
+
+def test_save_trims_titles_upserts_aliases_and_returns_updated_totals() -> None:
+    prepared = prepare_aliases(extracted_rows([("HKTRMs", 2, 100)]), None)
+    repository = FakeAliasRepository([])
+    result = save_alias_changes(
+        prepared,
+        {"HKTRMs": "  Hong Kong TUYI Business Travel Limited  "},
+        repository,
     )
-
-    assert embedder.calls == [["Alpha", "Alpha"]]
-    payload = repo.submissions[0]
-    assert len(payload.groups[0]["title_embedding"]) == 384
-    assert len(payload.mappings[0]["member_embedding"]) == 384
-
-
-def test_prepare_payload_returns_the_exact_materialized_singleton_board() -> None:
-    review = ReviewBoard(
-        groups={},
-        names={"Alpha": NameRecord("Alpha", None, "unknown", selected=False)},
-    )
-    request_id = "22222222-2222-4222-8222-222222222222"
-
-    payload, embedding_failed, materialized = _prepare_submission_payload(
-        review,
-        {},
-        FakeEmbedder(),
-        request_id,
-        {},
-    )
-
-    singleton_id = singleton_group_id("Alpha")
-    assert materialized is not review
-    assert review.groups == {}
-    assert review.names["Alpha"].selected is False
-    assert review.names["Alpha"].group_id is None
-    assert materialized.names["Alpha"].selected is True
-    assert materialized.names["Alpha"].group_id == singleton_id
-    assert set(materialized.groups) == {singleton_id}
-    assert payload.request_id == request_id
-    assert payload.groups[0]["id"] == singleton_id
-    assert payload.mappings[0]["group_id"] == singleton_id
-    assert len(payload.groups[0]["title_embedding"]) == 384
-    assert len(payload.mappings[0]["member_embedding"]) == 384
-    assert embedding_failed is False
+    assert repository.saved == [AliasMapping(
+        "HKTRMs", "hktrms", "Hong Kong TUYI Business Travel Limited"
+    )]
+    assert result["TRAVEL AGENT"].tolist() == [
+        "Hong Kong TUYI Business Travel Limited"
+    ]
 
 
-def _separate_alpha_review() -> PreparedReview:
-    review = ReviewBoard(
-        groups={},
-        names={"Alpha": NameRecord("Alpha", None, "unknown", selected=False)},
-    )
-    return PreparedReview(
-        review,
-        {},
-        {},
-        pd.DataFrame([{"cleaned_name": "Alpha", "rns": 2.0, "revenue": 8.0}]),
-        [],
-        "11111111-1111-4111-8111-111111111111",
-    )
+@pytest.mark.parametrize("final_names", [{}, {"HKTRM": "   "}, {"HKTRM": 4}])
+def test_invalid_or_incomplete_final_name_is_rejected_before_write(final_names) -> None:
+    prepared = prepare_aliases(extracted_rows([("HKTRM", 2, 100)]), None)
+    repository = FakeAliasRepository([])
+    with pytest.raises(ServiceValidationError, match="final company name"):
+        save_alias_changes(prepared, final_names, repository)
+    assert repository.saved == []
 
 
-def test_authorized_success_reconciles_materialized_singleton_everywhere() -> None:
-    prepared = _separate_alpha_review()
-    temporary_id = singleton_group_id("Alpha")
-    resolved_id = "22222222-2222-4222-8222-222222222222"
-    repo = FakeRepository()
-    repo.submit = lambda payload: (
-        repo.submissions.append(payload) or {temporary_id: resolved_id}
-    )
-
-    outcome = submit_review_authorized(prepared, repo, FakeEmbedder(), "pw", "pw")
-
-    assert outcome.success
-    assert set(prepared.board.groups) == {resolved_id}
-    assert prepared.board.names["Alpha"].group_id == resolved_id
-    assert prepared.board.names["Alpha"].selected is True
-    assert prepared.board.names["Alpha"].persisted_name == "Alpha"
-    assert prepared.original_mappings == {"Alpha": resolved_id}
-
-
-@pytest.mark.parametrize(
-    "response",
-    [RepositoryUnavailableError("lost"), {}],
-)
-def test_authorized_singleton_failure_preserves_visible_state_and_request(
-    response,
-) -> None:
-    prepared = _separate_alpha_review()
-    original_board = prepared.board
-    request_id = prepared.pending_request_id
-    repo = FakeRepository()
-
-    def submit(payload):
-        repo.submissions.append(payload)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    repo.submit = submit
-
-    outcome = submit_review_authorized(prepared, repo, FakeEmbedder(), "pw", "pw")
-
-    assert not outcome.success
-    assert prepared.board is original_board
-    assert prepared.board.groups == {}
-    assert prepared.board.names["Alpha"].selected is False
-    assert prepared.board.names["Alpha"].group_id is None
-    assert prepared.original_mappings == {}
-    assert prepared.pending_request_id == request_id
+def test_password_matches_only_strings() -> None:
+    assert password_matches("secret", "secret") is True
+    assert password_matches("wrong", "secret") is False
+    assert password_matches(None, None) is False
