@@ -205,6 +205,30 @@ def test_aggregate_requires_complete_mapping() -> None:
         aggregate_resolved_rows(rows, {})
 
 
+@pytest.mark.parametrize("invalid", ["", "   ", None, 7])
+def test_aggregate_rejects_invalid_final_names(invalid) -> None:
+    rows = pd.DataFrame([
+        {"cleaned_name": "HKTRM", "rns": 2.0, "revenue": 100.0}
+    ])
+    with pytest.raises(ServiceValidationError, match="final company name"):
+        aggregate_resolved_rows(rows, {"HKTRM": invalid})
+
+
+def test_aggregate_trims_final_names_before_grouping() -> None:
+    rows = pd.DataFrame([
+        {"cleaned_name": "First", "rns": 2.0, "revenue": 100.0},
+        {"cleaned_name": "Second", "rns": 3.0, "revenue": 50.0},
+    ])
+    result = aggregate_resolved_rows(
+        rows, {"First": " Canonical ", "Second": "Canonical"}
+    )
+    assert result.to_dict("records") == [{
+        "TRAVEL AGENT": "Canonical",
+        "Sum of RNS": 5.0,
+        "Sum of R REVENUE": 150.0,
+    }]
+
+
 def test_save_trims_titles_upserts_aliases_and_returns_updated_totals() -> None:
     prepared = prepare_aliases(extracted_rows([("HKTRMs", 2, 100)]), None)
     repository = FakeAliasRepository([])
@@ -219,6 +243,49 @@ def test_save_trims_titles_upserts_aliases_and_returns_updated_totals() -> None:
     assert result["TRAVEL AGENT"].tolist() == [
         "Hong Kong TUYI Business Travel Limited"
     ]
+
+
+def test_save_coalesces_matching_normalized_alias_keys_in_report_order() -> None:
+    prepared = prepare_aliases(
+        extracted_rows([("Acme", 2, 100), ("ACME", 3, 50)]), None
+    )
+    repository = FakeAliasRepository([])
+
+    result = save_alias_changes(
+        prepared, {"Acme": " Canonical ", "ACME": "Canonical"}, repository
+    )
+
+    assert repository.saved == [AliasMapping("Acme", "acme", "Canonical")]
+    assert result.to_dict("records") == [{
+        "TRAVEL AGENT": "Canonical",
+        "Sum of RNS": 5.0,
+        "Sum of R REVENUE": 150.0,
+    }]
+
+
+def test_save_rejects_conflicting_targets_for_one_normalized_alias_key() -> None:
+    prepared = prepare_aliases(
+        extracted_rows([("Acme", 2, 100), ("ACME", 3, 50)]), None
+    )
+    repository = FakeAliasRepository([])
+
+    with pytest.raises(ServiceValidationError, match="same alias key"):
+        save_alias_changes(
+            prepared, {"Acme": "First", "ACME": "Second"}, repository
+        )
+
+    assert repository.saved == []
+
+
+def test_prepared_rows_do_not_share_mutable_state_with_normalized_input() -> None:
+    normalized = pd.DataFrame([
+        {"cleaned_name": "Acme", "rns": 2.0, "revenue": 100.0}
+    ])
+    prepared = prepare_aliases(normalized, None)
+
+    normalized.loc[0, "rns"] = 999.0
+
+    assert prepared.rows.loc[0, "rns"] == 2.0
 
 
 @pytest.mark.parametrize("final_names", [{}, {"HKTRM": "   "}, {"HKTRM": 4}])

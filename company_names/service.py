@@ -149,7 +149,10 @@ def prepare_aliases(
         ))
 
     return PreparedAliases(
-        normalized, review_rows, database_available, database_error
+        normalized.copy(deep=True),
+        list(review_rows),
+        database_available,
+        database_error,
     )
 
 
@@ -158,11 +161,9 @@ def aggregate_resolved_rows(
 ) -> pd.DataFrame:
     """Aggregate normalized measures by their resolved final company name."""
     resolved = rows.copy()
-    resolved["final_name"] = resolved["cleaned_name"].map(final_names)
-    if resolved["final_name"].isna().any():
-        raise ServiceValidationError(
-            "Every cleaned company name needs a final company name"
-        )
+    cleaned_names = resolved["cleaned_name"].tolist()
+    trimmed = _validated_final_names(cleaned_names, final_names)
+    resolved["final_name"] = resolved["cleaned_name"].map(trimmed)
     return (
         resolved.groupby("final_name", as_index=False, sort=False)[["rns", "revenue"]]
         .sum()
@@ -183,29 +184,47 @@ def save_alias_changes(
     repository: AliasRepository,
 ) -> pd.DataFrame:
     """Validate, persist, and aggregate a complete edited alias mapping."""
-    cleaned_names = prepared.rows["cleaned_name"].tolist()
+    rows = prepared.rows.copy(deep=True)
+    cleaned_names = rows["cleaned_name"].tolist()
     if set(final_names) != set(cleaned_names):
         raise ServiceValidationError(
             "Every cleaned company name needs a final company name"
         )
 
-    trimmed: dict[str, str] = {}
+    trimmed = _validated_final_names(cleaned_names, final_names)
+    mappings_by_key: dict[str, AliasMapping] = {}
     for cleaned_name in cleaned_names:
-        final_name = final_names[cleaned_name]
-        if not isinstance(final_name, str) or not final_name.strip():
+        alias_key = normalize_lookup_key(cleaned_name)
+        final_name = trimmed[cleaned_name]
+        existing = mappings_by_key.get(alias_key)
+        if existing is not None and existing.canonical_name != final_name:
             raise ServiceValidationError(
-                "Every cleaned company name needs a final company name"
+                "Names with the same alias key need the same final company name"
             )
-        trimmed[cleaned_name] = final_name.strip()
+        if existing is None:
+            mappings_by_key[alias_key] = AliasMapping(
+                cleaned_name, alias_key, final_name
+            )
 
-    repository.upsert_aliases([
-        AliasMapping(cleaned_name, normalize_lookup_key(cleaned_name), final_name)
-        for cleaned_name, final_name in trimmed.items()
-    ])
-    return aggregate_resolved_rows(prepared.rows, trimmed)
+    repository.upsert_aliases(list(mappings_by_key.values()))
+    return aggregate_resolved_rows(rows, trimmed)
 
 
 def _aggregate_without_aliases(rows: pd.DataFrame) -> pd.DataFrame:
     return aggregate_resolved_rows(
         rows, dict(zip(rows["cleaned_name"], rows["cleaned_name"]))
     )
+
+
+def _validated_final_names(
+    cleaned_names: list[str], final_names: dict[str, str]
+) -> dict[str, str]:
+    trimmed: dict[str, str] = {}
+    for cleaned_name in cleaned_names:
+        final_name = final_names.get(cleaned_name)
+        if not isinstance(final_name, str) or not final_name.strip():
+            raise ServiceValidationError(
+                "Every cleaned company name needs a final company name"
+            )
+        trimmed[cleaned_name] = final_name.strip()
+    return trimmed
