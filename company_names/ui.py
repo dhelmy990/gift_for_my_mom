@@ -52,6 +52,51 @@ def reset_alias_editor_state(state: MutableMapping[str, object]) -> None:
             del state[key]
 
 
+def reconcile_alias_report_scope(
+    state: MutableMapping[str, object], mode: bool, upload_fingerprint: str
+) -> bool:
+    """Keep report state only while the current upload scope is unchanged."""
+    stored_fingerprint = state.get("prepared_aliases_fingerprint")
+    stored_mode = state.get("prepared_aliases_mode")
+    has_prepared_scope = (
+        "prepared_aliases" in state
+        or stored_fingerprint is not None
+        or stored_mode is not None
+    )
+    scope_matches = (
+        has_prepared_scope
+        and stored_fingerprint == upload_fingerprint
+        and stored_mode is mode
+    )
+    if has_prepared_scope and not scope_matches:
+        for key in (
+            "prepared_aliases",
+            "prepared_aliases_fingerprint",
+            "prepared_aliases_mode",
+            "current_alias_aggregate",
+            "current_alias_aggregate_fingerprint",
+            "final_alias_results",
+            "final_alias_results_fingerprint",
+        ):
+            state.pop(key, None)
+        reset_alias_editor_state(state)
+        return False
+
+    if scope_matches:
+        scoped_pairs = (
+            ("current_alias_aggregate", "current_alias_aggregate_fingerprint"),
+            ("final_alias_results", "final_alias_results_fingerprint"),
+        )
+        for value_key, fingerprint_key in scoped_pairs:
+            if (
+                value_key in state
+                and state.get(fingerprint_key) != upload_fingerprint
+            ):
+                state.pop(value_key, None)
+                state.pop(fingerprint_key, None)
+    return scope_matches
+
+
 def stage_save_password_attempt(state: MutableMapping[str, object]) -> None:
     """Capture a password for this save rerun and clear the visible widget."""
     state["_alias_save_password_attempt"] = state.get("alias_admin_password", "")

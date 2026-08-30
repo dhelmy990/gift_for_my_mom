@@ -6,6 +6,7 @@ from company_names.service import AliasReviewRow
 from company_names.ui import (
     alias_widget_token,
     edited_final_names,
+    reconcile_alias_report_scope,
     reset_alias_editor_state,
     stage_save_password_attempt,
     validate_save_password,
@@ -91,6 +92,58 @@ def test_reset_clears_all_alias_editor_widget_state() -> None:
     reset_alias_editor_state(state)
 
     assert state == {"unrelated": "keep"}
+
+
+def test_scope_change_actively_discards_report_and_editor_state() -> None:
+    state = {
+        "prepared_aliases": object(),
+        "prepared_aliases_fingerprint": "upload-a",
+        "prepared_aliases_mode": True,
+        "current_alias_aggregate": object(),
+        "current_alias_aggregate_fingerprint": "upload-a",
+        "final_alias_results": object(),
+        "final_alias_results_fingerprint": "upload-a",
+        "alias_final_acme": "typed edit",
+        "alias_search": "acme",
+        "unrelated": "keep",
+    }
+
+    assert reconcile_alias_report_scope(state, True, "upload-b") is False
+
+    assert state == {"unrelated": "keep"}
+    assert reconcile_alias_report_scope(state, True, "upload-a") is False
+
+
+def test_unchanged_scope_preserves_report_and_typed_edits() -> None:
+    prepared = object()
+    aggregate = object()
+    state = {
+        "prepared_aliases": prepared,
+        "prepared_aliases_fingerprint": "upload-a",
+        "prepared_aliases_mode": True,
+        "current_alias_aggregate": aggregate,
+        "current_alias_aggregate_fingerprint": "upload-a",
+        "alias_final_acme": "typed edit",
+    }
+
+    assert reconcile_alias_report_scope(state, True, "upload-a") is True
+
+    assert state["prepared_aliases"] is prepared
+    assert state["current_alias_aggregate"] is aggregate
+    assert state["alias_final_acme"] == "typed edit"
+
+
+def test_mode_change_clears_state_even_with_same_supplied_fingerprint() -> None:
+    state = {
+        "prepared_aliases": object(),
+        "prepared_aliases_fingerprint": "same",
+        "prepared_aliases_mode": True,
+        "alias_final_acme": "typed edit",
+    }
+
+    assert reconcile_alias_report_scope(state, False, "same") is False
+
+    assert state == {}
 
 
 def test_save_attempt_stages_and_immediately_clears_password() -> None:

@@ -15,7 +15,11 @@ from company_names.service import (
     aggregate_resolved_rows,
     prepare_aliases,
 )
-from company_names.ui import render_alias_editor, reset_alias_editor_state
+from company_names.ui import (
+    reconcile_alias_report_scope,
+    render_alias_editor,
+    reset_alias_editor_state,
+)
 from plumber import extract_all_tables, extract_last_table_as_df, two_tablify
 
 
@@ -152,6 +156,9 @@ def main() -> None:
         help="Off = PDF Extractor, On = Collation across agents",
     )
     upload_fingerprint = _upload_fingerprint(mode, uploaded_files or [])
+    prepared_matches = reconcile_alias_report_scope(
+        st.session_state, mode, upload_fingerprint
+    )
 
     if mode:
         options_key = "excluded_agent_options"
@@ -185,8 +192,11 @@ def main() -> None:
         for key in (
             "prepared_aliases",
             "prepared_aliases_fingerprint",
+            "prepared_aliases_mode",
             "current_alias_aggregate",
             "current_alias_aggregate_fingerprint",
+            "final_alias_results",
+            "final_alias_results_fingerprint",
         ):
             st.session_state.pop(key, None)
         with st.spinner("Processing..."):
@@ -197,20 +207,17 @@ def main() -> None:
                         prepared = _prepare_collation_aliases(frames)
                         st.session_state["prepared_aliases"] = prepared
                         st.session_state["prepared_aliases_fingerprint"] = upload_fingerprint
+                        st.session_state["prepared_aliases_mode"] = mode
                         st.session_state["current_alias_aggregate"] = _initial_alias_aggregate(prepared)
                         st.session_state["current_alias_aggregate_fingerprint"] = upload_fingerprint
+                        prepared_matches = True
                 else:
                     _process_extractor(uploaded_files, int(k))
             except ServiceValidationError as exc:
                 st.error(str(exc))
 
     prepared = st.session_state.get("prepared_aliases")
-    prepared_matches = (
-        mode
-        and isinstance(prepared, PreparedAliases)
-        and st.session_state.get("prepared_aliases_fingerprint") == upload_fingerprint
-    )
-    if prepared_matches:
+    if prepared_matches and mode and isinstance(prepared, PreparedAliases):
         aggregate = st.session_state.get("current_alias_aggregate")
         if (
             isinstance(aggregate, pd.DataFrame)
