@@ -36,7 +36,7 @@ class SupabaseAliasRepository:
         if not isinstance(service_key, str) or not service_key.strip():
             raise RepositoryUnavailableError("SUPABASE_SERVICE_KEY is missing")
         try:
-            return cls(create_client(url.strip(), service_key.strip()))
+            return cls(create_client(url.strip().rstrip("/"), service_key.strip()))
         except Exception:
             raise RepositoryUnavailableError("Could not create Supabase client") from None
 
@@ -50,7 +50,18 @@ class SupabaseAliasRepository:
             )
             if not isinstance(response.data, list):
                 raise TypeError("alias response data must be a list")
-            return [AliasMapping(**row) for row in response.data]
+            fields = {"cleaned_alias", "alias_key", "canonical_name"}
+            mappings = []
+            for row in response.data:
+                if not isinstance(row, dict) or set(row) != fields:
+                    raise TypeError("alias row fields are invalid")
+                if any(
+                    not isinstance(row[field], str) or not row[field].strip()
+                    for field in fields
+                ):
+                    raise TypeError("alias row values are invalid")
+                mappings.append(AliasMapping(**row))
+            return mappings
         except Exception:
             raise RepositoryUnavailableError("Could not read company aliases") from None
 

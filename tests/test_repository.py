@@ -99,7 +99,7 @@ def test_upsert_aliases_skips_client_for_an_empty_batch() -> None:
 
 
 @pytest.mark.parametrize("url", ["https://project.supabase.co", "https://project.supabase.co/"])
-def test_from_credentials_preserves_trailing_slash_form(monkeypatch, url: str) -> None:
+def test_from_credentials_normalizes_trailing_slash(monkeypatch, url: str) -> None:
     calls: list[tuple[str, str]] = []
     client = RecordingClient()
 
@@ -112,7 +112,7 @@ def test_from_credentials_preserves_trailing_slash_form(monkeypatch, url: str) -
     repository = SupabaseAliasRepository.from_credentials(f" {url} ", " service-key ")
 
     assert repository._client is client
-    assert calls == [(url, "service-key")]
+    assert calls == [("https://project.supabase.co", "service-key")]
 
 
 @pytest.mark.parametrize(
@@ -152,7 +152,23 @@ def test_client_failures_are_translated_without_leaking_details(operation, expec
     assert "secret" not in str(caught.value)
 
 
-@pytest.mark.parametrize("data", [None, {}, [None], [{"alias_key": "incomplete"}]])
+@pytest.mark.parametrize(
+    "data",
+    [
+        None,
+        {},
+        [None],
+        [{"alias_key": "incomplete"}],
+        [{"cleaned_alias": 123, "alias_key": "alias", "canonical_name": "Canonical"}],
+        [{"cleaned_alias": "Alias", "alias_key": " ", "canonical_name": "Canonical"}],
+        [{
+            "cleaned_alias": "Alias",
+            "alias_key": "alias",
+            "canonical_name": "Canonical",
+            "unexpected": "field",
+        }],
+    ],
+)
 def test_malformed_list_response_is_safely_translated(data: object) -> None:
     with pytest.raises(
         RepositoryUnavailableError, match="^Could not read company aliases$"
