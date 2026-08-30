@@ -1,49 +1,75 @@
-"""Runtime coverage for the real Streamlit company-name review renderer."""
+"""Runtime coverage for the real Streamlit alias editor."""
 
 from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
 
-FIXTURE_APP = Path(__file__).parent / "fixtures" / "singleton_review_app.py"
+FIXTURE_APP = Path(__file__).parent / "fixtures" / "simple_alias_app.py"
+CANONICAL = "Hong Kong TUYI Business Travel Limited"
 
 
-def _rendered_text(app: AppTest) -> str:
-    values: list[str] = []
-    for element_type in ("markdown", "text", "caption", "subheader"):
-        values.extend(str(element.value) for element in app.get(element_type))
-    values.extend(str(element.label) for element in app.expander)
-    values.extend(str(element.label) for element in app.button)
-    values.extend(str(element.label) for element in app.text_input)
-    values.extend(str(element.label) for element in app.multiselect)
-    return "\n".join(values)
+def _app() -> AppTest:
+    return AppTest.from_file(FIXTURE_APP, default_timeout=10).run()
 
 
-def test_review_renderer_executes_all_safe_runtime_sections():
-    fixture_source = FIXTURE_APP.read_bytes()
-    app = AppTest.from_file(FIXTURE_APP, default_timeout=10).run()
+def test_simple_alias_editor_renders_without_exception() -> None:
+    app = _app()
 
     assert not app.exception
-    assert FIXTURE_APP.read_bytes() == fixture_source
-    rendered = _rendered_text(app)
-    for expected in (
-        "Review company names",
-        "Search every company name in this report",
-        "Separate companies",
-        "Suggested matches (1)",
-        "Beta → Existing",
-        "Move Beta to Existing",
-        "Working tray",
-        "Return to separate",
-        "Combined groups",
-        "Move to tray",
-        "Final company name",
-        "Review and save",
-        "2 separate companies",
-        "1 combined group",
-        "1 name combined",
-        "Admin password",
-        "Save mappings and show totals",
-        "Backup and recovery",
-    ):
-        assert expected in rendered
+    assert "Company name mappings" in [item.value for item in app.subheader]
+    assert any("HKTRMs" in item.value for item in app.markdown)
+    assert any("Suggested from HKTRM" in item.value for item in app.caption)
+
+
+def test_accepting_suggestion_does_not_write_automatically() -> None:
+    app = _app()
+
+    app.button(key="accept_alias_hktrms").click().run()
+
+    assert app.text_input(key="alias_final_hktrms").value == CANONICAL
+    assert app.session_state["fixture_repository"].saved == []
+
+
+def test_correct_save_returns_one_aggregated_canonical_row() -> None:
+    app = _app()
+    app.button(key="accept_alias_hktrms").click().run()
+    app.text_input(key="alias_admin_password").input("correct")
+
+    app.button(key="save_aliases").click().run()
+
+    saved = app.session_state["fixture_repository"].saved
+    assert len(saved) == 2
+    result = app.session_state["fixture_result"]
+    assert result.to_dict("records") == [{
+        "TRAVEL AGENT": CANONICAL,
+        "Sum of RNS": 5.0,
+        "Sum of R REVENUE": 150.0,
+    }]
+    assert app.text_input(key="alias_admin_password").value == ""
+
+
+def test_wrong_password_does_not_save_aliases() -> None:
+    app = _app()
+    app.text_input(key="alias_final_hktrms").input(CANONICAL)
+    app.text_input(key="alias_admin_password").input("wrong")
+
+    app.button(key="save_aliases").click().run()
+
+    assert app.session_state["fixture_repository"].saved == []
+    assert any("Incorrect admin password" in item.value for item in app.error)
+    assert app.text_input(key="alias_admin_password").value == ""
+
+
+def test_failed_save_retains_typed_final_name_for_retry() -> None:
+    app = _app()
+    app.text_input(key="alias_final_hktrms").input(CANONICAL)
+    app.text_input(key="alias_admin_password").input("correct")
+    app.checkbox(key="fixture_fail_next_save").check()
+
+    app.button(key="save_aliases").click().run()
+
+    assert app.text_input(key="alias_final_hktrms").value == CANONICAL
+    assert app.text_input(key="alias_admin_password").value == ""
+    assert app.session_state["fixture_repository"].saved == []
+    assert any("network unavailable" in item.value for item in app.error)

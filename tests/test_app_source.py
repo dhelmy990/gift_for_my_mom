@@ -1,61 +1,38 @@
-import ast
 from pathlib import Path
 
 
-def test_app_has_no_debug_print_and_parses():
+def test_app_uses_alias_pipeline_without_embeddings_or_groups() -> None:
     source = Path("app.py").read_text()
 
-    ast.parse(source)
-    assert "DEBUG:" not in source
-    assert "print(" not in source
-    assert "render_name_review" in source
-    assert "prepare_review" in source
+    assert "SupabaseAliasRepository" in source
+    assert "prepare_aliases" in source
+    assert "aggregate_resolved_rows" in source
+    assert "render_alias_editor" in source
+    assert "reset_alias_editor_state" in source
+    assert "FastEmbeddingProvider" not in source
+    assert "render_name_review" not in source
+    assert "ReviewBoard" not in source
 
 
-def test_app_surfaces_sanitized_repository_operation_for_diagnostics():
+def test_runtime_has_no_obsolete_module_imports() -> None:
+    runtime = "\n".join(
+        path.read_text()
+        for path in [Path("app.py"), *Path("company_names").glob("*.py")]
+    )
+    for obsolete in (
+        "fastembed",
+        "streamlit_sortables",
+        "name_groups",
+        "name_mappings",
+        "submission_ledger",
+    ):
+        assert obsolete not in runtime
+
+
+def test_processing_state_is_scoped_and_editor_resets_only_on_process() -> None:
     source = Path("app.py").read_text()
 
-    assert "except RepositoryUnavailableError as exc:" in source
-    assert "st.error(f\"Database request failed: {exc}\")" in source
-    assert "logger.warning(\"Supabase preparation failed: %s\", exc)" in source
-
-
-def test_name_review_uses_plain_language_singleton_first_copy():
-    source = Path("company_names/ui.py").read_text()
-
-    for phrase in (
-        "1. Find names  →  2. Combine duplicates  →  3. Review and save",
-        "Separate companies",
-        "Names left under Separate companies will be saved separately automatically.",
-        "View separate companies (",
-        "Working tray",
-        "Combined groups",
-        "Left out of this report",
-        "Final company name",
-        '"Name"',
-        '"Move to"',
-        '"Move"',
-        "Move a company name",
-        "Save mappings and show totals",
-        "Backup and recovery",
-    ):
-        assert phrase in source
-
-    for old_phrase in (
-        '"In inventory"',
-        '"Canonical title"',
-        '"Unlock permanent actions"',
-        '"Submit final review"',
-        '"Excluded from this report"',
-        '"Accessible name movement controls"',
-    ):
-        assert old_phrase not in source
-
-    assert 'review_widget_key(request_id, "final_company_name")' in source
-    assert 'review_widget_key(request_id, "new_group_title")' not in source
-    assert '"Return to separate"' in source
-    assert '"Move to tray"' in source
-    assert 'f"Move tray names to {matching_group.canonical_title}"' in source
-    assert source.count(
-        "columns[0].markdown(semantic_pill(board.names[name]), unsafe_allow_html=True)"
-    ) == 2
+    assert "prepared_aliases_fingerprint" in source
+    assert "current_alias_aggregate_fingerprint" in source
+    assert 'if uploaded_files and st.button("Process PDFs")' in source
+    assert "reset_alias_editor_state(st.session_state)" in source

@@ -3,24 +3,19 @@
 import os
 import tempfile
 import logging
+import hashlib
 
 import pandas as pd
 import streamlit as st
 
-from company_names.matching import FastEmbeddingProvider
-from company_names.repository import RepositoryUnavailableError, SupabaseMappingRepository
-from company_names.review_session import (
-    reconcile_final_results,
-    compute_upload_fingerprint as identify_uploads,
-    merge_custom_excluded_agent,
-    reconcile_prepared_review,
-)
+from company_names.repository import RepositoryUnavailableError, SupabaseAliasRepository
 from company_names.service import (
+    PreparedAliases,
     ServiceValidationError,
-    prepare_review,
-    submission_fingerprint as board_revision,
+    aggregate_resolved_rows,
+    prepare_aliases,
 )
-from company_names.ui import render_name_review
+from company_names.ui import render_alias_editor, reset_alias_editor_state
 from plumber import extract_all_tables, extract_last_table_as_df, two_tablify
 
 
@@ -37,15 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 @st.cache_resource
-def get_mapping_repository(url: str, service_key: str) -> SupabaseMappingRepository:
+def get_alias_repository(url: str, service_key: str) -> SupabaseAliasRepository:
     """Create one server-side repository client per credential pair."""
-    return SupabaseMappingRepository.from_credentials(url, service_key)
-
-
-@st.cache_resource
-def get_embedding_provider() -> FastEmbeddingProvider:
-    """Reuse the lazily loaded embedding model across Streamlit reruns."""
-    return FastEmbeddingProvider()
+    return SupabaseAliasRepository.from_credentials(url, service_key)
 
 
 def _secret(name: str) -> str | None:
@@ -57,14 +46,25 @@ def _secret(name: str) -> str | None:
 
 
 def _add_custom_excluded_agent() -> None:
-    options, selected = merge_custom_excluded_agent(
-        st.session_state["excluded_agent_options"],
-        st.session_state.get("excluded_agents", []),
-        st.session_state.get("new_excluded_agent", ""),
-    )
+    options = list(st.session_state["excluded_agent_options"])
+    selected = list(st.session_state.get("excluded_agents", []))
+    new_agent = st.session_state.get("new_excluded_agent", "").strip()
+    if new_agent and new_agent not in options:
+        options.append(new_agent)
+    if new_agent and new_agent not in selected:
+        selected.append(new_agent)
     st.session_state["excluded_agent_options"] = options
     st.session_state["excluded_agents"] = selected
     st.session_state["new_excluded_agent"] = ""
+
+
+def _upload_fingerprint(mode: bool, uploaded_files) -> str:
+    """Identify the current upload selection without moving file cursors."""
+    digest = hashlib.sha256(b"collation" if mode else b"extractor")
+    for uploaded_file in uploaded_files:
+        digest.update(uploaded_file.name.encode("utf-8", errors="replace"))
+        digest.update(uploaded_file.getvalue())
+    return digest.hexdigest()
 
 
 def _extract_collation(uploaded_files, excluded_agents: list[str]) -> list[pd.DataFrame]:
@@ -118,33 +118,27 @@ def _process_extractor(uploaded_files, k: int) -> None:
         st.dataframe(rr_df, use_container_width=True)
 
 
-def _prepare_collation_review(frames: list[pd.DataFrame], upload_fingerprint: str) -> None:
+def _prepare_collation_aliases(frames: list[pd.DataFrame]) -> PreparedAliases:
+    rows = pd.concat(frames, ignore_index=True)
     url = _secret("SUPABASE_URL")
     service_key = _secret("SUPABASE_SERVICE_KEY")
     if not url or not service_key:
-        st.session_state.pop("prepared_name_review", None)
-        st.error("Database not configured. Add SUPABASE_URL and SUPABASE_SERVICE_KEY to Streamlit secrets.")
-        st.markdown("[Open the Supabase setup guide](./docs/SUPABASE_SETUP.md)")
-        return
+        return prepare_aliases(rows, None)
     try:
-        repository = get_mapping_repository(url, service_key)
-        embedder = get_embedding_provider()
-        # Use raw extracted rows so normalization happens at the review boundary.
-        prepared = prepare_review(pd.concat(frames, ignore_index=True), repository, embedder)
-    except ServiceValidationError:
-        raise
-    except RepositoryUnavailableError as exc:
-        st.session_state.pop("prepared_name_review", None)
-        logger.warning("Supabase preparation failed: %s", exc)
-        st.error(f"Database request failed: {exc}")
-        return
-    except Exception:
-        st.session_state.pop("prepared_name_review", None)
-        st.error("Database connection unavailable. Check the Supabase configuration and tables, then retry.")
-        return
-    st.session_state["prepared_name_review"] = prepared
-    st.session_state["prepared_name_review_fingerprint"] = upload_fingerprint
-    st.success("Database connected. Name review is ready.")
+        repository = get_alias_repository(url, service_key)
+    except RepositoryUnavailableError as error:
+        logger.warning("Supabase alias repository unavailable: %s", error)
+        prepared = prepare_aliases(rows, None)
+        prepared.database_error = str(error)
+        return prepared
+    return prepare_aliases(rows, repository)
+
+
+def _initial_alias_aggregate(prepared: PreparedAliases) -> pd.DataFrame:
+    return aggregate_resolved_rows(
+        prepared.rows,
+        {row.cleaned_name: row.final_name for row in prepared.review_rows},
+    )
 
 
 def main() -> None:
@@ -157,10 +151,7 @@ def main() -> None:
         value=False,
         help="Off = PDF Extractor, On = Collation across agents",
     )
-    upload_fingerprint = identify_uploads(mode, uploaded_files or [])
-    prepared = reconcile_prepared_review(
-        st.session_state, mode, upload_fingerprint
-    )
+    upload_fingerprint = _upload_fingerprint(mode, uploaded_files or [])
 
     if mode:
         options_key = "excluded_agent_options"
@@ -189,50 +180,64 @@ def main() -> None:
         )
 
     if uploaded_files and st.button("Process PDFs"):
-        # Processing is the deliberate reset boundary; ordinary reruns retain the board.
-        reconcile_prepared_review(st.session_state, False, upload_fingerprint)
+        # A deliberate new extraction starts a fresh editor; ordinary reruns retain edits.
+        reset_alias_editor_state(st.session_state)
+        for key in (
+            "prepared_aliases",
+            "prepared_aliases_fingerprint",
+            "current_alias_aggregate",
+            "current_alias_aggregate_fingerprint",
+        ):
+            st.session_state.pop(key, None)
         with st.spinner("Processing..."):
             try:
                 if mode:
                     frames = _extract_collation(uploaded_files, excluded_agents)
                     if frames:
-                        _prepare_collation_review(frames, upload_fingerprint)
+                        prepared = _prepare_collation_aliases(frames)
+                        st.session_state["prepared_aliases"] = prepared
+                        st.session_state["prepared_aliases_fingerprint"] = upload_fingerprint
+                        st.session_state["current_alias_aggregate"] = _initial_alias_aggregate(prepared)
+                        st.session_state["current_alias_aggregate_fingerprint"] = upload_fingerprint
                 else:
                     _process_extractor(uploaded_files, int(k))
             except ServiceValidationError as exc:
                 st.error(str(exc))
 
-    prepared = reconcile_prepared_review(st.session_state, mode, upload_fingerprint)
-    if prepared is not None:
+    prepared = st.session_state.get("prepared_aliases")
+    prepared_matches = (
+        mode
+        and isinstance(prepared, PreparedAliases)
+        and st.session_state.get("prepared_aliases_fingerprint") == upload_fingerprint
+    )
+    if prepared_matches:
+        aggregate = st.session_state.get("current_alias_aggregate")
+        if (
+            isinstance(aggregate, pd.DataFrame)
+            and st.session_state.get("current_alias_aggregate_fingerprint")
+            == upload_fingerprint
+        ):
+            st.subheader("Company totals")
+            st.dataframe(aggregate, use_container_width=True)
+
         url = _secret("SUPABASE_URL")
         service_key = _secret("SUPABASE_SERVICE_KEY")
-        if url and service_key:
-            st.success("Database connected.")
-            reconcile_final_results(
-                st.session_state,
-                upload_fingerprint,
-                board_revision(prepared.board),
-            )
-            result = render_name_review(
-                prepared,
-                get_mapping_repository(url, service_key),
-                get_embedding_provider(),
-                _secret("ADMIN_PASSWORD"),
-            )
-            if result is not None:
-                st.session_state["final_results"] = result
-                st.session_state["final_results_review_fingerprint"] = upload_fingerprint
-                st.session_state["final_results_mutation_fingerprint"] = board_revision(
-                    prepared.board
-                )
-            final_results = reconcile_final_results(
-                st.session_state,
-                upload_fingerprint,
-                board_revision(prepared.board),
-            )
-            if isinstance(final_results, pd.DataFrame):
-                st.subheader("Final grouped totals")
-                st.dataframe(final_results, use_container_width=True)
+        repository = None
+        if url and service_key and prepared.database_available:
+            try:
+                repository = get_alias_repository(url, service_key)
+            except RepositoryUnavailableError as error:
+                logger.warning("Supabase alias editor unavailable: %s", error)
+                st.error(str(error))
+        result = render_alias_editor(
+            prepared,
+            repository,
+            _secret("ADMIN_PASSWORD"),
+        )
+        if result is not None:
+            st.session_state["current_alias_aggregate"] = result
+            st.session_state["current_alias_aggregate_fingerprint"] = upload_fingerprint
+            st.rerun()
 
 
 if __name__ == "__main__":
