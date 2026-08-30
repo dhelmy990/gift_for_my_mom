@@ -9,8 +9,9 @@ company-name aliases in Supabase.
 1. Upload one or more reports and process them.
 2. The app cleans company names and combines duplicate cleaned rows.
 3. An exact saved normalized alias is applied automatically.
-4. For an unmatched name, RapidFuzz may offer a similar saved alias as an optional
-   suggestion. The user must accept it or edit the final company name directly.
+4. An unmatched name defaults to its cleaned name. RapidFuzz may offer a similar saved
+   alias as an optional suggestion, which can be accepted, replaced with a manual edit,
+   or ignored so the unchanged cleaned name is saved.
 5. Enter the admin password and select **Save all changes and update totals**.
 6. The aliases are upserted to Supabase, then room nights and revenue are summed under
    each final company name.
