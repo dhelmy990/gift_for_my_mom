@@ -252,10 +252,6 @@ def render_alias_editor(
     stored_edits = dict(st.session_state.get("alias_edits", {}))
     for row in prepared.review_rows:
         stored_edits.setdefault(row.cleaned_name, row.final_name)
-        widget_token = alias_widget_token(row.cleaned_name, prepared.review_rows)
-        final_key = f"alias_final_{widget_token}"
-        if final_key not in st.session_state:
-            st.session_state[final_key] = stored_edits[row.cleaned_name]
     st.session_state["alias_edits"] = stored_edits
 
     counts = {
@@ -304,6 +300,7 @@ def render_alias_editor(
     for row in page.rows:
         widget_token = alias_widget_token(row.cleaned_name, prepared.review_rows)
         final_key = f"alias_final_{widget_token}"
+        st.session_state[final_key] = stored_edits[row.cleaned_name]
 
         name_column, final_column, status_column = st.columns((2, 3, 1))
         name_column.markdown(row.cleaned_name)

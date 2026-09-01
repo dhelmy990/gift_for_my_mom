@@ -7,6 +7,9 @@ from streamlit.testing.v1 import AppTest
 
 FIXTURE_APP = Path(__file__).parent / "fixtures" / "simple_alias_app.py"
 PAGINATED_FIXTURE_APP = Path(__file__).parent / "fixtures" / "paginated_alias_app.py"
+SHARED_DESTINATION_FIXTURE_APP = (
+    Path(__file__).parent / "fixtures" / "shared_destination_alias_app.py"
+)
 REAL_APP = Path(__file__).parents[1] / "app.py"
 CANONICAL = "Hong Kong TUYI Business Travel Limited"
 
@@ -75,6 +78,59 @@ def test_paginated_editor_navigates_without_losing_first_page_edit() -> None:
     assert app.session_state["alias_page"] == 2
     app.button(key="alias_previous_top").click().run()
     assert app.text_input(key="alias_final_company 00").value == "Edited Company"
+
+
+def test_saved_aliases_sharing_a_destination_stay_separate_until_save() -> None:
+    app = AppTest.from_file(
+        SHARED_DESTINATION_FIXTURE_APP, default_timeout=10
+    ).run()
+    assert not app.exception
+
+    app.selectbox(key="alias_status_filter").select("Already saved").run()
+
+    assert app.text_input(key="alias_final_a").value == "C"
+    assert app.text_input(key="alias_final_b").value == "C"
+    assert app.text_input(key="alias_final_a").disabled is False
+    assert app.text_input(key="alias_final_b").disabled is False
+    assert app.session_state["alias_edits"]["A"] == "C"
+    assert app.session_state["alias_edits"]["B"] == "C"
+
+    app.text_input(key="alias_final_a").input("Edited A").run()
+    assert app.session_state["alias_edits"]["A"] == "Edited A"
+    assert app.text_input(key="alias_final_a").value == "Edited A"
+
+    app.button(key="alias_next_top").click().run()
+    assert app.session_state["alias_page"] == 2
+    app.button(key="alias_previous_top").click().run()
+    assert app.text_input(key="alias_final_a").value == "Edited A"
+    assert app.text_input(key="alias_final_b").value == "C"
+
+    app.text_input(key="alias_final_a").input("C").run()
+    assert app.session_state["alias_edits"]["A"] == "C"
+    assert app.text_input(key="alias_final_a").value == "C"
+
+    assert app.session_state["fixture_repository"].saved == []
+    assert "fixture_result" not in app.session_state
+
+    app.button(key="save_aliases").click().run()
+
+    assert not app.error
+    saved = app.session_state["fixture_repository"].saved
+    assert len(saved) == 145
+    saved_targets = {
+        mapping.cleaned_alias: mapping.canonical_name for mapping in saved
+    }
+    assert saved_targets["A"] == "C"
+    assert saved_targets["B"] == "C"
+    assert saved_targets["Alias 144"] == "Canonical 144"
+    shared = app.session_state["fixture_result"].query(
+        "`TRAVEL AGENT` == 'C'"
+    )
+    assert shared.to_dict("records") == [{
+        "TRAVEL AGENT": "C",
+        "Sum of RNS": 5.0,
+        "Sum of R REVENUE": 50.0,
+    }]
 
 
 def test_real_app_login_gates_uploads_and_supports_logout() -> None:
