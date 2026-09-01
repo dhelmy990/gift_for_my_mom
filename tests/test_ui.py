@@ -176,6 +176,17 @@ def test_final_name_inputs_have_row_specific_labels() -> None:
     assert 'f"Final company name for {row.cleaned_name}"' in source
 
 
+def test_mapping_layout_has_headers_and_row_scoped_suggestions() -> None:
+    source = Path("company_names/ui.py").read_text()
+
+    assert 'name_header.markdown("**Old name**")' in source
+    assert 'final_header.markdown("**New / final name**")' in source
+    assert 'status_header.markdown("**Status**")' in source
+    assert "status_column.caption(row.status.title())" in source
+    assert 'final_column.caption(\n                f"Suggested from' in source
+    assert 'final_column.button(\n                "Use this suggestion"' in source
+
+
 def test_filter_options_and_page_sizes_match_the_approved_ui() -> None:
     assert ALIAS_FILTER_OPTIONS == (
         "Needs review",

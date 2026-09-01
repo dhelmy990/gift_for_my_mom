@@ -301,6 +301,10 @@ def render_alias_editor(
         st.caption(f"Showing {page.start}–{page.end} of {page.total_rows}")
         if page.total_pages > 1:
             _render_page_controls(page, "top")
+        name_header, final_header, status_header = st.columns((2, 3, 1))
+        name_header.markdown("**Old name**")
+        final_header.markdown("**New / final name**")
+        status_header.markdown("**Status**")
     else:
         st.info("No company names match this view. Choose another filter or search.")
 
@@ -318,14 +322,14 @@ def render_alias_editor(
             on_change=_store_alias_edit,
             args=(row.cleaned_name, final_key),
         )
-        status_column.markdown(row.status.title())
+        status_column.caption(row.status.title())
 
         if row.suggestion is not None:
-            st.caption(
+            final_column.caption(
                 f"Suggested from {row.suggestion.saved_alias} "
                 f"({row.suggestion.score:.0f}%): {row.suggestion.canonical_name}"
             )
-            st.button(
+            final_column.button(
                 "Use this suggestion",
                 key=f"accept_alias_{widget_token}",
                 on_click=_accept_suggestion,
