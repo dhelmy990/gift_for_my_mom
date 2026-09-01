@@ -221,6 +221,33 @@ def test_aggregate_rejects_invalid_final_names(invalid) -> None:
         aggregate_resolved_rows(rows, {"HKTRM": invalid})
 
 
+def test_aggregate_names_every_missing_or_blank_final_name() -> None:
+    rows = pd.DataFrame([
+        {"cleaned_name": "A", "rns": 1.0, "revenue": 10.0},
+        {"cleaned_name": "B", "rns": 1.0, "revenue": 20.0},
+        {"cleaned_name": "C", "rns": 1.0, "revenue": 30.0},
+    ])
+    with pytest.raises(ServiceValidationError) as caught:
+        aggregate_resolved_rows(rows, {"A": "Final", "B": "  ", "C": None})
+    assert str(caught.value) == (
+        "Every cleaned company name needs a final company name. "
+        "Missing or blank: B, C"
+    )
+
+
+def test_aggregate_names_deduplicates_missing_or_blank_final_name() -> None:
+    rows = pd.DataFrame([
+        {"cleaned_name": "A", "rns": 1.0, "revenue": 10.0},
+        {"cleaned_name": "A", "rns": 2.0, "revenue": 20.0},
+    ])
+    with pytest.raises(ServiceValidationError) as caught:
+        aggregate_resolved_rows(rows, {})
+    assert str(caught.value) == (
+        "Every cleaned company name needs a final company name. "
+        "Missing or blank: A"
+    )
+
+
 def test_aggregate_trims_final_names_before_grouping() -> None:
     rows = pd.DataFrame([
         {"cleaned_name": "First", "rns": 2.0, "revenue": 100.0},
@@ -281,6 +308,42 @@ def test_save_rejects_conflicting_targets_for_one_normalized_alias_key() -> None
             prepared, {"Acme": "First", "ACME": "Second"}, repository
         )
 
+    assert repository.saved == []
+
+
+def test_save_names_a_missing_alias_before_repository_write() -> None:
+    prepared = prepare_aliases(extracted_rows([("A", 1, 10), ("B", 1, 20)]), None)
+    repository = FakeAliasRepository([])
+    with pytest.raises(ServiceValidationError, match=r"Missing or blank: B$"):
+        save_alias_changes(prepared, {"A": "Final"}, repository)
+    assert repository.saved == []
+
+
+def test_save_rejects_an_unexpected_alias_before_repository_write() -> None:
+    prepared = prepare_aliases(extracted_rows([("A", 1, 10)]), None)
+    repository = FakeAliasRepository([])
+    with pytest.raises(
+        ServiceValidationError,
+        match=r"unexpected cleaned names: Stale alias$",
+    ):
+        save_alias_changes(
+            prepared,
+            {"A": "Final", "Stale alias": "Old value"},
+            repository,
+        )
+    assert repository.saved == []
+
+
+def test_save_rejects_non_text_unexpected_alias_before_repository_write() -> None:
+    prepared = prepare_aliases(extracted_rows([("A", 1, 10)]), None)
+    repository = FakeAliasRepository([])
+    with pytest.raises(
+        ServiceValidationError,
+        match=r"unexpected cleaned names: 7, Older$",
+    ):
+        save_alias_changes(
+            prepared, {"A": "Final", 7: "Stale", "Older": "Old"}, repository
+        )
     assert repository.saved == []
 
 

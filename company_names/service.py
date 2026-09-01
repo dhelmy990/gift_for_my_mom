@@ -180,12 +180,15 @@ def save_alias_changes(
     """Validate, persist, and aggregate a complete edited alias mapping."""
     rows = prepared.rows.copy(deep=True)
     cleaned_names = rows["cleaned_name"].tolist()
-    if set(final_names) != set(cleaned_names):
+    trimmed = _validated_final_names(cleaned_names, final_names)
+    cleaned_name_set = set(cleaned_names)
+    unexpected = [name for name in final_names if name not in cleaned_name_set]
+    if unexpected:
         raise ServiceValidationError(
-            "Every cleaned company name needs a final company name"
+            "Final company name mapping contains unexpected cleaned names: "
+            + ", ".join(map(str, unexpected))
         )
 
-    trimmed = _validated_final_names(cleaned_names, final_names)
     mappings_by_key: dict[str, AliasMapping] = {}
     for cleaned_name in cleaned_names:
         alias_key = normalize_lookup_key(cleaned_name)
@@ -213,12 +216,22 @@ def _aggregate_without_aliases(rows: pd.DataFrame) -> pd.DataFrame:
 def _validated_final_names(
     cleaned_names: list[str], final_names: dict[str, str]
 ) -> dict[str, str]:
-    trimmed: dict[str, str] = {}
+    invalid: list[str] = []
+    seen_invalid: set[str] = set()
     for cleaned_name in cleaned_names:
         final_name = final_names.get(cleaned_name)
-        if not isinstance(final_name, str) or not final_name.strip():
-            raise ServiceValidationError(
-                "Every cleaned company name needs a final company name"
-            )
-        trimmed[cleaned_name] = final_name.strip()
+        if (
+            not isinstance(final_name, str) or not final_name.strip()
+        ) and cleaned_name not in seen_invalid:
+            invalid.append(cleaned_name)
+            seen_invalid.add(cleaned_name)
+    if invalid:
+        raise ServiceValidationError(
+            "Every cleaned company name needs a final company name. "
+            "Missing or blank: " + ", ".join(invalid)
+        )
+
+    trimmed: dict[str, str] = {}
+    for cleaned_name in cleaned_names:
+        trimmed[cleaned_name] = final_names[cleaned_name].strip()
     return trimmed
