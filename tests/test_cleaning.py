@@ -35,7 +35,7 @@ def test_company_alias_fixture_freezes_source_corpus() -> None:
             "Betoptop GmbHBüro Kornwestheim Stammheimer Straße",
             "Betoptop",
         ),
-        ("Hong Thai Travel Services (S) Pte", "Hong Thai Travel Services (S)"),
+        ("Hong Thai Travel Services (S) Pte", "Hong Thai Travel Services"),
         (
             "TRVCTravco Corporation Limited Travco House,",
             "TRVCTravco Corporation",
@@ -84,6 +84,30 @@ def test_clean_company_name_does_not_infer_aliases(name: str) -> None:
 
 def test_clean_company_name_removes_suffix_wrapper_punctuation() -> None:
     assert clean_company_name("Acme (Pte Ltd)") == "Acme"
+
+
+@pytest.mark.parametrize(
+    ("raw_name", "expected"),
+    [
+        ("ACME (Singapore) Travel (Wholesale)", "ACME Travel"),
+        ("ACME (Regional (Singapore)) Travel", "ACME Travel"),
+        ("Wendy Tour (S) P/L (Formerly SMI)", "Wendy Tour P/L"),
+    ],
+)
+def test_clean_company_name_removes_complete_parenthesized_segments(
+    raw_name: str, expected: str
+) -> None:
+    assert clean_company_name(raw_name) == expected
+
+
+@pytest.mark.parametrize("raw_name", ["ACME (Singapore", "ACME Singapore)"])
+def test_clean_company_name_preserves_unmatched_parentheses(raw_name: str) -> None:
+    assert clean_company_name(raw_name) == raw_name
+
+
+def test_clean_company_name_rejects_parenthesized_only_name() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        clean_company_name("(Formerly ACME)")
 
 
 def test_normalize_lookup_key() -> None:
