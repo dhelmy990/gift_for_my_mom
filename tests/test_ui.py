@@ -102,6 +102,8 @@ def test_scope_change_actively_discards_report_and_editor_state() -> None:
         "prepared_aliases": object(),
         "prepared_aliases_fingerprint": "upload-a",
         "prepared_aliases_mode": True,
+        "saved_alias_aggregate": object(),
+        "saved_alias_aggregate_fingerprint": "upload-a",
         "current_alias_aggregate": object(),
         "current_alias_aggregate_fingerprint": "upload-a",
         "final_alias_results": object(),
@@ -117,14 +119,16 @@ def test_scope_change_actively_discards_report_and_editor_state() -> None:
     assert reconcile_alias_report_scope(state, True, "upload-a") is False
 
 
-def test_unchanged_scope_preserves_report_and_typed_edits() -> None:
+def test_unchanged_scope_preserves_saved_report_and_typed_edits() -> None:
     prepared = object()
     aggregate = object()
     state = {
         "prepared_aliases": prepared,
         "prepared_aliases_fingerprint": "upload-a",
         "prepared_aliases_mode": True,
-        "current_alias_aggregate": aggregate,
+        "saved_alias_aggregate": aggregate,
+        "saved_alias_aggregate_fingerprint": "upload-a",
+        "current_alias_aggregate": object(),
         "current_alias_aggregate_fingerprint": "upload-a",
         "alias_final_acme": "typed edit",
     }
@@ -132,8 +136,25 @@ def test_unchanged_scope_preserves_report_and_typed_edits() -> None:
     assert reconcile_alias_report_scope(state, True, "upload-a") is True
 
     assert state["prepared_aliases"] is prepared
-    assert state["current_alias_aggregate"] is aggregate
+    assert state["saved_alias_aggregate"] is aggregate
+    assert "current_alias_aggregate" not in state
+    assert "current_alias_aggregate_fingerprint" not in state
     assert state["alias_final_acme"] == "typed edit"
+
+
+def test_matching_scope_discards_saved_totals_with_a_stale_fingerprint() -> None:
+    state = {
+        "prepared_aliases": object(),
+        "prepared_aliases_fingerprint": "upload-a",
+        "prepared_aliases_mode": True,
+        "saved_alias_aggregate": object(),
+        "saved_alias_aggregate_fingerprint": "upload-b",
+    }
+
+    assert reconcile_alias_report_scope(state, True, "upload-a") is True
+
+    assert "saved_alias_aggregate" not in state
+    assert "saved_alias_aggregate_fingerprint" not in state
 
 
 def test_mode_change_clears_state_even_with_same_supplied_fingerprint() -> None:

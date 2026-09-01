@@ -50,6 +50,11 @@ rows = pd.DataFrame([
     ],
 ])
 prepared = prepare_aliases(rows, repository)
+saved_aggregate = st.session_state.get("saved_alias_aggregate")
+if isinstance(saved_aggregate, pd.DataFrame):
+    st.dataframe(saved_aggregate, use_container_width=True)
 result = render_alias_editor(prepared, repository)
 if result is not None:
     st.session_state["fixture_result"] = result
+    st.session_state["saved_alias_aggregate"] = result
+    st.rerun()

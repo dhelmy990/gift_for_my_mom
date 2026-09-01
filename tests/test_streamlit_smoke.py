@@ -111,6 +111,8 @@ def test_saved_aliases_sharing_a_destination_stay_separate_until_save() -> None:
 
     assert app.session_state["fixture_repository"].saved == []
     assert "fixture_result" not in app.session_state
+    assert "saved_alias_aggregate" not in app.session_state
+    assert len(app.dataframe) == 0
 
     app.button(key="save_aliases").click().run()
 
@@ -123,6 +125,15 @@ def test_saved_aliases_sharing_a_destination_stay_separate_until_save() -> None:
     assert saved_targets["A"] == "C"
     assert saved_targets["B"] == "C"
     assert saved_targets["Alias 144"] == "Canonical 144"
+    assert len(app.dataframe) == 1
+    saved_shared = app.session_state["saved_alias_aggregate"].query(
+        "`TRAVEL AGENT` == 'C'"
+    )
+    assert saved_shared.to_dict("records") == [{
+        "TRAVEL AGENT": "C",
+        "Sum of RNS": 5.0,
+        "Sum of R REVENUE": 50.0,
+    }]
     shared = app.session_state["fixture_result"].query(
         "`TRAVEL AGENT` == 'C'"
     )

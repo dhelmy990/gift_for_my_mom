@@ -88,6 +88,11 @@ def reconcile_alias_report_scope(
     state: MutableMapping[str, object], mode: bool, upload_fingerprint: str
 ) -> bool:
     """Keep report state only while the current upload scope is unchanged."""
+    for key in (
+        "current_alias_aggregate",
+        "current_alias_aggregate_fingerprint",
+    ):
+        state.pop(key, None)
     stored_fingerprint = state.get("prepared_aliases_fingerprint")
     stored_mode = state.get("prepared_aliases_mode")
     has_prepared_scope = (
@@ -105,6 +110,8 @@ def reconcile_alias_report_scope(
             "prepared_aliases",
             "prepared_aliases_fingerprint",
             "prepared_aliases_mode",
+            "saved_alias_aggregate",
+            "saved_alias_aggregate_fingerprint",
             "current_alias_aggregate",
             "current_alias_aggregate_fingerprint",
             "final_alias_results",
@@ -116,7 +123,7 @@ def reconcile_alias_report_scope(
 
     if scope_matches:
         scoped_pairs = (
-            ("current_alias_aggregate", "current_alias_aggregate_fingerprint"),
+            ("saved_alias_aggregate", "saved_alias_aggregate_fingerprint"),
             ("final_alias_results", "final_alias_results_fingerprint"),
         )
         for value_key, fingerprint_key in scoped_pairs:

@@ -13,7 +13,6 @@ from company_names.repository import RepositoryUnavailableError, SupabaseAliasRe
 from company_names.service import (
     PreparedAliases,
     ServiceValidationError,
-    aggregate_resolved_rows,
     prepare_aliases,
 )
 from company_names.ui import (
@@ -164,13 +163,6 @@ def _prepare_collation_aliases(frames: list[pd.DataFrame]) -> PreparedAliases:
     return prepare_aliases(rows, repository)
 
 
-def _initial_alias_aggregate(prepared: PreparedAliases) -> pd.DataFrame:
-    return aggregate_resolved_rows(
-        prepared.rows,
-        {row.cleaned_name: row.final_name for row in prepared.review_rows},
-    )
-
-
 def main() -> None:
     if not render_login_gate(_secret("ADMIN_PASSWORD")):
         return
@@ -221,6 +213,8 @@ def main() -> None:
             "prepared_aliases",
             "prepared_aliases_fingerprint",
             "prepared_aliases_mode",
+            "saved_alias_aggregate",
+            "saved_alias_aggregate_fingerprint",
             "current_alias_aggregate",
             "current_alias_aggregate_fingerprint",
             "final_alias_results",
@@ -236,8 +230,6 @@ def main() -> None:
                         st.session_state["prepared_aliases"] = prepared
                         st.session_state["prepared_aliases_fingerprint"] = upload_fingerprint
                         st.session_state["prepared_aliases_mode"] = mode
-                        st.session_state["current_alias_aggregate"] = _initial_alias_aggregate(prepared)
-                        st.session_state["current_alias_aggregate_fingerprint"] = upload_fingerprint
                         prepared_matches = True
                 else:
                     _process_extractor(uploaded_files, int(k))
@@ -246,13 +238,13 @@ def main() -> None:
 
     prepared = st.session_state.get("prepared_aliases")
     if prepared_matches and mode and isinstance(prepared, PreparedAliases):
-        aggregate = st.session_state.get("current_alias_aggregate")
+        aggregate = st.session_state.get("saved_alias_aggregate")
         if (
             isinstance(aggregate, pd.DataFrame)
-            and st.session_state.get("current_alias_aggregate_fingerprint")
+            and st.session_state.get("saved_alias_aggregate_fingerprint")
             == upload_fingerprint
         ):
-            st.subheader("Company totals")
+            st.subheader("Last saved company totals")
             st.dataframe(aggregate, use_container_width=True)
 
         url = _secret("SUPABASE_URL")
@@ -269,8 +261,8 @@ def main() -> None:
             repository,
         )
         if result is not None:
-            st.session_state["current_alias_aggregate"] = result
-            st.session_state["current_alias_aggregate_fingerprint"] = upload_fingerprint
+            st.session_state["saved_alias_aggregate"] = result
+            st.session_state["saved_alias_aggregate_fingerprint"] = upload_fingerprint
             st.rerun()
 
 
