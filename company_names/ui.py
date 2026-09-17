@@ -10,7 +10,7 @@ import math
 import pandas as pd
 import streamlit as st
 
-from .cleaning import normalize_lookup_key
+from .cleaning import final_name_error, normalize_company_text, normalize_lookup_key
 from .repository import AliasRepository, RepositoryUnavailableError
 from .service import (
     AliasReviewRow,
@@ -216,6 +216,7 @@ def _store_alias_edit(cleaned_name: str, widget_key: str) -> None:
 def _accept_suggestion(
     cleaned_name: str, widget_key: str, canonical_name: str
 ) -> None:
+    canonical_name = normalize_company_text(canonical_name)
     st.session_state[widget_key] = canonical_name
     edits = dict(st.session_state.get("alias_edits", {}))
     edits[cleaned_name] = canonical_name
@@ -256,9 +257,12 @@ def render_alias_editor(
 ) -> pd.DataFrame | None:
     """Render mappings for the current report and return totals after a save."""
     st.subheader("Company name mappings")
+    st.caption(
+        "Final names must be UPPERCASE, with single spaces and no leading or trailing spaces."
+    )
     stored_edits = dict(st.session_state.get("alias_edits", {}))
     for row in prepared.review_rows:
-        stored_edits.setdefault(row.cleaned_name, row.final_name)
+        stored_edits.setdefault(row.cleaned_name, normalize_company_text(row.final_name))
     st.session_state["alias_edits"] = stored_edits
 
     counts = {
@@ -322,6 +326,9 @@ def render_alias_editor(
             on_change=_store_alias_edit,
             args=(row.cleaned_name, final_key),
         )
+        issue = final_name_error(stored_edits[row.cleaned_name])
+        if issue:
+            final_column.error(issue)
         status_column.caption(row.status.title())
 
         if row.suggestion is not None:
@@ -340,9 +347,19 @@ def render_alias_editor(
         _render_page_controls(page, "bottom")
 
     edits = dict(st.session_state["alias_edits"])
+    invalid_names = [
+        row.cleaned_name for row in prepared.review_rows
+        if final_name_error(edits[row.cleaned_name])
+    ]
+    if invalid_names:
+        st.error(
+            "Correct invalid final names before saving (including other pages): "
+            + ", ".join(invalid_names)
+        )
     save_disabled = (
         not prepared.database_available
         or repository is None
+        or bool(invalid_names)
     )
     save_requested = st.button(
         "Save all changes and update totals",

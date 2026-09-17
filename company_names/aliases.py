@@ -7,7 +7,7 @@ import math
 
 from rapidfuzz.fuzz import ratio
 
-from .cleaning import normalize_lookup_key
+from .cleaning import clean_company_name, normalize_company_text, normalize_lookup_key
 from .repository import AliasMapping
 
 
@@ -47,4 +47,8 @@ def suggest_alias(
         return None
 
     winner = winners[0]
-    return AliasSuggestion(winner.cleaned_alias, winner.canonical_name, best_score)
+    return AliasSuggestion(
+        clean_company_name(winner.cleaned_alias),
+        normalize_company_text(winner.canonical_name),
+        best_score,
+    )

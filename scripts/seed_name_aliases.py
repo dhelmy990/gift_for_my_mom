@@ -13,7 +13,7 @@ from typing import Mapping, TextIO
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from company_names.cleaning import clean_company_name, normalize_lookup_key
+from company_names.cleaning import clean_company_name, normalize_company_text, normalize_lookup_key
 from company_names.configuration import repository_settings
 from company_names.http_repository import HttpAliasRepository
 from company_names.repository import (
@@ -59,6 +59,10 @@ def load_alias_rows(path: Path) -> list[AliasMapping]:
             canonical_name = raw_target.strip()
             if not canonical_name:
                 raise SeedValidationError(f"row {row_number} has an empty target_text value")
+            try:
+                canonical_name = normalize_company_text(raw_target)
+            except ValueError:
+                raise SeedValidationError(f"row {row_number} has an invalid target_text value") from None
 
             try:
                 cleaned_alias = clean_company_name(raw_input)

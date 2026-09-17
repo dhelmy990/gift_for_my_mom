@@ -49,8 +49,8 @@ def extracted_rows(values=None) -> pd.DataFrame:
 
 def test_normalize_cleans_and_sums_duplicate_names_as_floats() -> None:
     assert normalize_extracted_rows(extracted_rows()).to_dict("records") == [
-        {"cleaned_name": "Acme", "rns": 3.5, "revenue": 30.25},
-        {"cleaned_name": "Unknown", "rns": 4.0, "revenue": 40.0},
+        {"cleaned_name": "ACME", "rns": 3.5, "revenue": 30.25},
+        {"cleaned_name": "UNKNOWN", "rns": 4.0, "revenue": 40.0},
     ]
 
 
@@ -64,7 +64,7 @@ def test_normalize_cleans_and_sums_duplicate_names_as_floats() -> None:
 def test_normalize_accepts_alternate_column_sets(columns, values) -> None:
     result = normalize_extracted_rows(pd.DataFrame([values], columns=columns))
     assert result.to_dict("records") == [
-        {"cleaned_name": "Acme", "rns": 2.0, "revenue": 10.0}
+        {"cleaned_name": "ACME", "rns": 2.0, "revenue": 10.0}
     ]
 
 
@@ -74,7 +74,7 @@ def test_collate_extracted_rows_groups_agent_column_not_dataframe_indexes() -> N
         extracted_rows([("Acme", 3, 20)]),
     ])
     assert result.to_dict("records") == [{
-        "TRAVEL AGENT": "Acme",
+        "TRAVEL AGENT": "ACME",
         "Sum of RNS": 5.0,
         "Sum of R REVENUE": 30.0,
     }]
@@ -120,7 +120,7 @@ def test_exact_alias_is_authoritative() -> None:
     ])
     prepared = prepare_aliases(extracted_rows([("HKTRM", 2, 100)]), repository)
     assert prepared.review_rows == [AliasReviewRow(
-        "HKTRM", "Hong Kong TUYI Business Travel Limited", "saved", None
+        "HKTRM", "HONG KONG TUYI BUSINESS TRAVEL LIMITED", "saved", None
     )]
 
 
@@ -129,7 +129,7 @@ def test_exact_alias_uses_normalized_key() -> None:
         AliasMapping("H K T R M", "h k t r m", "Canonical")
     ])
     prepared = prepare_aliases(extracted_rows([("h k t r m", 2, 100)]), repository)
-    assert prepared.review_rows[0].final_name == "Canonical"
+    assert prepared.review_rows[0].final_name == "CANONICAL"
     assert prepared.review_rows[0].status == "saved"
 
 
@@ -141,11 +141,11 @@ def test_unknown_name_defaults_to_cleaned_name_with_suggestion() -> None:
         extracted_rows([("HKTRMs Pte Ltd", 2, 100)]), repository
     )
     row = prepared.review_rows[0]
-    assert row.cleaned_name == "HKTRMs"
-    assert row.final_name == "HKTRMs"
+    assert row.cleaned_name == "HKTRMS"
+    assert row.final_name == "HKTRMS"
     assert row.status == "suggested"
     assert row.suggestion is not None
-    assert row.suggestion.canonical_name == "Hong Kong TUYI Business Travel Limited"
+    assert row.suggestion.canonical_name == "HONG KONG TUYI BUSINESS TRAVEL LIMITED"
 
 
 def test_unknown_without_suggestion_is_new() -> None:
@@ -153,7 +153,7 @@ def test_unknown_without_suggestion_is_new() -> None:
         extracted_rows([("Miki Travel", 2, 100)]), FakeAliasRepository([])
     )
     assert prepared.review_rows == [AliasReviewRow(
-        "Miki Travel", "Miki Travel", "new", None
+        "MIKI TRAVEL", "MIKI TRAVEL", "new", None
     )]
 
 
@@ -165,7 +165,7 @@ def test_database_failure_keeps_cleaned_rows_available() -> None:
     assert prepared.database_available is False
     assert prepared.database_error == "table missing"
     assert prepared.review_rows == [AliasReviewRow(
-        "Miki Travel", "Miki Travel", "new", None
+        "MIKI TRAVEL", "MIKI TRAVEL", "new", None
     )]
 
 
@@ -173,7 +173,7 @@ def test_no_repository_is_a_cleaned_database_unavailable_fallback() -> None:
     prepared = prepare_aliases(extracted_rows([("Miki Travel", 2, 100)]), None)
     assert prepared.database_available is False
     assert prepared.database_error is None
-    assert prepared.review_rows[0].final_name == "Miki Travel"
+    assert prepared.review_rows[0].final_name == "MIKI TRAVEL"
 
 
 def test_alias_review_rows_are_frozen() -> None:
@@ -187,20 +187,20 @@ def test_prepared_review_rows_support_intentional_session_edits() -> None:
 
     prepared.review_rows.append(AliasReviewRow("Other", "Other", "new", None))
 
-    assert [row.cleaned_name for row in prepared.review_rows] == ["Acme", "Other"]
+    assert [row.cleaned_name for row in prepared.review_rows] == ["ACME", "Other"]
 
 
 def test_resolved_names_combine_and_sum() -> None:
     rows = pd.DataFrame([
         {"cleaned_name": "HKTRM", "rns": 2.0, "revenue": 100.0},
-        {"cleaned_name": "HKTRMs", "rns": 3.5, "revenue": 50.25},
+        {"cleaned_name": "HKTRMS", "rns": 3.5, "revenue": 50.25},
     ])
     result = aggregate_resolved_rows(rows, {
-        "HKTRM": "Hong Kong TUYI Business Travel Limited",
-        "HKTRMs": "Hong Kong TUYI Business Travel Limited",
+        "HKTRM": "HONG KONG TUYI BUSINESS TRAVEL LIMITED",
+        "HKTRMS": "HONG KONG TUYI BUSINESS TRAVEL LIMITED",
     })
     assert result.to_dict("records") == [{
-        "TRAVEL AGENT": "Hong Kong TUYI Business Travel Limited",
+        "TRAVEL AGENT": "HONG KONG TUYI BUSINESS TRAVEL LIMITED",
         "Sum of RNS": 5.5,
         "Sum of R REVENUE": 150.25,
     }]
@@ -228,7 +228,7 @@ def test_aggregate_names_every_missing_or_blank_final_name() -> None:
         {"cleaned_name": "C", "rns": 1.0, "revenue": 30.0},
     ])
     with pytest.raises(ServiceValidationError) as caught:
-        aggregate_resolved_rows(rows, {"A": "Final", "B": "  ", "C": None})
+        aggregate_resolved_rows(rows, {"A": "FINAL", "B": "  ", "C": None})
     assert str(caught.value) == (
         "Every cleaned company name needs a final company name. "
         "Missing or blank: B, C"
@@ -248,50 +248,50 @@ def test_aggregate_names_deduplicates_missing_or_blank_final_name() -> None:
     )
 
 
-def test_aggregate_trims_final_names_before_grouping() -> None:
+def test_aggregate_groups_identical_valid_final_names() -> None:
     rows = pd.DataFrame([
         {"cleaned_name": "First", "rns": 2.0, "revenue": 100.0},
         {"cleaned_name": "Second", "rns": 3.0, "revenue": 50.0},
     ])
     result = aggregate_resolved_rows(
-        rows, {"First": " Canonical ", "Second": "Canonical"}
+        rows, {"First": "CANONICAL", "Second": "CANONICAL"}
     )
     assert result.to_dict("records") == [{
-        "TRAVEL AGENT": "Canonical",
+        "TRAVEL AGENT": "CANONICAL",
         "Sum of RNS": 5.0,
         "Sum of R REVENUE": 150.0,
     }]
 
 
-def test_save_trims_titles_upserts_aliases_and_returns_updated_totals() -> None:
-    prepared = prepare_aliases(extracted_rows([("HKTRMs", 2, 100)]), None)
+def test_save_upserts_valid_aliases_and_returns_updated_totals() -> None:
+    prepared = prepare_aliases(extracted_rows([("HKTRMS", 2, 100)]), None)
     repository = FakeAliasRepository([])
     result = save_alias_changes(
         prepared,
-        {"HKTRMs": "  Hong Kong TUYI Business Travel Limited  "},
+        {"HKTRMS": "HONG KONG TUYI BUSINESS TRAVEL LIMITED"},
         repository,
     )
     assert repository.saved == [AliasMapping(
-        "HKTRMs", "hktrms", "Hong Kong TUYI Business Travel Limited"
+        "HKTRMS", "hktrms", "HONG KONG TUYI BUSINESS TRAVEL LIMITED"
     )]
     assert result["TRAVEL AGENT"].tolist() == [
-        "Hong Kong TUYI Business Travel Limited"
+        "HONG KONG TUYI BUSINESS TRAVEL LIMITED"
     ]
 
 
 def test_save_coalesces_matching_normalized_alias_keys_in_report_order() -> None:
     prepared = prepare_aliases(
-        extracted_rows([("Acme", 2, 100), ("ACME", 3, 50)]), None
+        extracted_rows([("Acme-Travel", 2, 100), ("ACME TRAVEL", 3, 50)]), None
     )
     repository = FakeAliasRepository([])
 
     result = save_alias_changes(
-        prepared, {"Acme": " Canonical ", "ACME": "Canonical"}, repository
+        prepared, {"ACME-TRAVEL": "CANONICAL", "ACME TRAVEL": "CANONICAL"}, repository
     )
 
-    assert repository.saved == [AliasMapping("Acme", "acme", "Canonical")]
+    assert repository.saved == [AliasMapping("ACME-TRAVEL", "acme travel", "CANONICAL")]
     assert result.to_dict("records") == [{
-        "TRAVEL AGENT": "Canonical",
+        "TRAVEL AGENT": "CANONICAL",
         "Sum of RNS": 5.0,
         "Sum of R REVENUE": 150.0,
     }]
@@ -299,13 +299,13 @@ def test_save_coalesces_matching_normalized_alias_keys_in_report_order() -> None
 
 def test_save_rejects_conflicting_targets_for_one_normalized_alias_key() -> None:
     prepared = prepare_aliases(
-        extracted_rows([("Acme", 2, 100), ("ACME", 3, 50)]), None
+        extracted_rows([("Acme-Travel", 2, 100), ("ACME TRAVEL", 3, 50)]), None
     )
     repository = FakeAliasRepository([])
 
     with pytest.raises(ServiceValidationError, match="same alias key"):
         save_alias_changes(
-            prepared, {"Acme": "First", "ACME": "Second"}, repository
+            prepared, {"ACME-TRAVEL": "FIRST", "ACME TRAVEL": "SECOND"}, repository
         )
 
     assert repository.saved == []
@@ -315,7 +315,7 @@ def test_save_names_a_missing_alias_before_repository_write() -> None:
     prepared = prepare_aliases(extracted_rows([("A", 1, 10), ("B", 1, 20)]), None)
     repository = FakeAliasRepository([])
     with pytest.raises(ServiceValidationError, match=r"Missing or blank: B$"):
-        save_alias_changes(prepared, {"A": "Final"}, repository)
+        save_alias_changes(prepared, {"A": "FINAL"}, repository)
     assert repository.saved == []
 
 
@@ -328,7 +328,7 @@ def test_save_rejects_an_unexpected_alias_before_repository_write() -> None:
     ):
         save_alias_changes(
             prepared,
-            {"A": "Final", "Stale alias": "Old value"},
+            {"A": "FINAL", "Stale alias": "Old value"},
             repository,
         )
     assert repository.saved == []
@@ -342,14 +342,14 @@ def test_save_rejects_non_text_unexpected_alias_before_repository_write() -> Non
         match=r"unexpected cleaned names: 7, Older$",
     ):
         save_alias_changes(
-            prepared, {"A": "Final", 7: "Stale", "Older": "Old"}, repository
+            prepared, {"A": "FINAL", 7: "Stale", "Older": "Old"}, repository
         )
     assert repository.saved == []
 
 
 def test_prepared_rows_do_not_share_mutable_state_with_normalized_input() -> None:
     normalized = pd.DataFrame([
-        {"cleaned_name": "Acme", "rns": 2.0, "revenue": 100.0}
+        {"cleaned_name": "ACME", "rns": 2.0, "revenue": 100.0}
     ])
     prepared = prepare_aliases(normalized, None)
 

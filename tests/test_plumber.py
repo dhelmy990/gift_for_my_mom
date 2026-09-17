@@ -14,7 +14,7 @@ def test_parser_preserves_duplicate_agent_occurrences():
         {"TRAVEL AGENT": "Acme", "Sum of RNS": 3.0, "Sum of R REVENUE": 20.0},
     ]
     assert normalize_extracted_rows(result).to_dict("records") == [
-        {"cleaned_name": "Acme", "rns": 5.0, "revenue": 30.5}
+        {"cleaned_name": "ACME", "rns": 5.0, "revenue": 30.5}
     ]
 
 

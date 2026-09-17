@@ -19,6 +19,20 @@ It uses an authenticated API and SQLite, with no separate database daemon.
 6. The aliases are saved to the configured storage, then room nights and revenue are summed under
    each final company name.
 
+Company names and suggestions are populated in **UPPERCASE**, with leading and
+trailing whitespace removed and repeated whitespace collapsed to one ordinary
+space. The same cleanup standardizes full-width characters, Unicode accents,
+curly quotes and dashes, and removes common invisible copy/paste artifacts.
+Reviewed final names retain their legal suffixes and meaningful punctuation.
+Names sharing an alias key start with the same final value.
+
+If an edit reintroduces invalid formatting, the editor shows the expected value
+when the edit is submitted (Enter or leaving the field) and blocks saving until
+corrected. Errors on other pages also block saving. Empty, punctuation-only,
+unsupported control-character, and oversized names are rejected. Actual spelling
+differences still require review; the app does not guess whether different names
+identify the same company.
+
 Persistence uses one table, `company_aliases`. The current app does not use
 the retired grouping, embedding, or submission-ledger database objects.
 

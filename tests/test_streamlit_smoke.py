@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 
@@ -11,7 +12,7 @@ SHARED_DESTINATION_FIXTURE_APP = (
     Path(__file__).parent / "fixtures" / "shared_destination_alias_app.py"
 )
 REAL_APP = Path(__file__).parents[1] / "app.py"
-CANONICAL = "Hong Kong TUYI Business Travel Limited"
+CANONICAL = "HONG KONG TUYI BUSINESS TRAVEL LIMITED"
 
 
 def _app() -> AppTest:
@@ -23,7 +24,7 @@ def test_simple_alias_editor_renders_without_exception() -> None:
 
     assert not app.exception
     assert "Company name mappings" in [item.value for item in app.subheader]
-    assert any("HKTRMs" in item.value for item in app.markdown)
+    assert any("HKTRMS" in item.value for item in app.markdown)
     assert any("Suggested from HKTRM" in item.value for item in app.caption)
 
 
@@ -64,6 +65,44 @@ def test_failed_save_retains_typed_final_name_for_retry() -> None:
     assert any("network unavailable" in item.value for item in app.error)
 
 
+@pytest.mark.parametrize("invalid", [
+    "lowercase", " TRAILING ", "TWO  SPACES", "NON\u00a0BREAKING",
+    "ZERO\u200bWIDTH", "ＦＵＬＬＷＩＤＴＨ", "SMART—DASH", "\u202eHIDDEN", "---",
+])
+def test_invalid_edit_blocks_save_until_corrected(invalid) -> None:
+    app = _app()
+    app.text_input(key="alias_final_hktrms").input(invalid).run()
+
+    assert not app.exception
+    assert app.text_input(key="alias_final_hktrms").value == invalid
+    assert app.button(key="save_aliases").disabled
+    assert any("HKTRMS" in item.value for item in app.error)
+    assert app.session_state["fixture_repository"].saved == []
+
+    app.text_input(key="alias_final_hktrms").input(CANONICAL).run()
+    assert not app.error
+    assert not app.button(key="save_aliases").disabled
+    app.button(key="save_aliases").click().run()
+    assert not app.error
+    assert len(app.session_state["fixture_repository"].saved) == 2
+
+
+def test_invalid_edit_on_hidden_page_still_blocks_save() -> None:
+    app = AppTest.from_file(PAGINATED_FIXTURE_APP, default_timeout=10).run()
+    app.text_input(key="alias_final_company 00").input("invalid ").run()
+    app.button(key="alias_next_top").click().run()
+
+    assert not app.exception
+    assert app.session_state["alias_page"] == 2
+    assert app.button(key="save_aliases").disabled
+    assert any("COMPANY 00" in item.value for item in app.error)
+
+    app.button(key="alias_previous_top").click().run()
+    app.text_input(key="alias_final_company 00").input("COMPANY 00").run()
+    assert not app.error
+    assert not app.button(key="save_aliases").disabled
+
+
 def test_paginated_editor_navigates_without_losing_first_page_edit() -> None:
     app = AppTest.from_file(PAGINATED_FIXTURE_APP, default_timeout=10).run()
     assert not app.exception
@@ -71,13 +110,13 @@ def test_paginated_editor_navigates_without_losing_first_page_edit() -> None:
     assert app.selectbox(key="alias_page_size").value == 20
     assert app.session_state["alias_page"] == 1
 
-    app.text_input(key="alias_final_company 00").input("Edited Company").run()
+    app.text_input(key="alias_final_company 00").input("EDITED COMPANY").run()
     app.button(key="alias_next_top").click().run()
 
     assert not app.exception
     assert app.session_state["alias_page"] == 2
     app.button(key="alias_previous_top").click().run()
-    assert app.text_input(key="alias_final_company 00").value == "Edited Company"
+    assert app.text_input(key="alias_final_company 00").value == "EDITED COMPANY"
 
 
 def test_saved_aliases_sharing_a_destination_stay_separate_until_save() -> None:
@@ -95,14 +134,14 @@ def test_saved_aliases_sharing_a_destination_stay_separate_until_save() -> None:
     assert app.session_state["alias_edits"]["A"] == "C"
     assert app.session_state["alias_edits"]["B"] == "C"
 
-    app.text_input(key="alias_final_a").input("Edited A").run()
-    assert app.session_state["alias_edits"]["A"] == "Edited A"
-    assert app.text_input(key="alias_final_a").value == "Edited A"
+    app.text_input(key="alias_final_a").input("EDITED A").run()
+    assert app.session_state["alias_edits"]["A"] == "EDITED A"
+    assert app.text_input(key="alias_final_a").value == "EDITED A"
 
     app.button(key="alias_next_top").click().run()
     assert app.session_state["alias_page"] == 2
     app.button(key="alias_previous_top").click().run()
-    assert app.text_input(key="alias_final_a").value == "Edited A"
+    assert app.text_input(key="alias_final_a").value == "EDITED A"
     assert app.text_input(key="alias_final_b").value == "C"
 
     app.text_input(key="alias_final_a").input("C").run()
@@ -124,7 +163,7 @@ def test_saved_aliases_sharing_a_destination_stay_separate_until_save() -> None:
     }
     assert saved_targets["A"] == "C"
     assert saved_targets["B"] == "C"
-    assert saved_targets["Alias 144"] == "Canonical 144"
+    assert saved_targets["ALIAS 144"] == "CANONICAL 144"
     assert len(app.dataframe) == 1
     saved_shared = app.session_state["saved_alias_aggregate"].query(
         "`TRAVEL AGENT` == 'C'"

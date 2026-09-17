@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import Literal
 
 import pandas as pd
 
 from .aliases import AliasSuggestion, suggest_alias
-from .cleaning import clean_company_name, normalize_lookup_key
+from .cleaning import (
+    clean_company_name,
+    final_name_error,
+    normalize_company_text,
+    normalize_lookup_key,
+)
 from .repository import (
     AliasMapping,
     AliasRepository,
@@ -37,6 +42,7 @@ class PreparedAliases:
     review_rows: list[AliasReviewRow]
     database_available: bool
     database_error: str | None
+    historical_aliases: dict[str, AliasMapping] = field(default_factory=dict)
 
 
 def normalize_extracted_rows(rows: pd.DataFrame) -> pd.DataFrame:
@@ -125,7 +131,32 @@ def prepare_aliases(
             database_available = False
             database_error = str(error)
 
-    exact = {item.alias_key: item for item in aliases}
+    exact: dict[str, AliasMapping] = {}
+    historical_aliases: dict[str, AliasMapping] = {}
+    for index, item in enumerate(aliases, start=1):
+        try:
+            saved = AliasMapping(
+                clean_company_name(item.cleaned_alias),
+                normalize_lookup_key(item.cleaned_alias),
+                normalize_company_text(item.canonical_name),
+            )
+        except ValueError as error:
+            raise ServiceValidationError(
+                f"Saved alias row {index} is invalid: {error}"
+            ) from None
+        previous = exact.get(saved.alias_key)
+        if previous is not None and previous.canonical_name != saved.canonical_name:
+            raise ServiceValidationError(
+                f"Saved aliases conflict for key {saved.alias_key!r}: "
+                f"{previous.canonical_name!r} and {saved.canonical_name!r}"
+            )
+        exact[saved.alias_key] = saved
+        if item.alias_key != saved.alias_key:
+            historical_aliases[item.alias_key] = saved
+    aliases = list(exact.values())
+    defaults: dict[str, str] = {}
+    for name in sorted(normalized["cleaned_name"]):
+        defaults.setdefault(normalize_lookup_key(name), name)
     review_rows: list[AliasReviewRow] = []
     for cleaned_name in normalized["cleaned_name"]:
         mapping = exact.get(normalize_lookup_key(cleaned_name))
@@ -137,7 +168,7 @@ def prepare_aliases(
         suggestion = suggest_alias(cleaned_name, aliases) if aliases else None
         review_rows.append(AliasReviewRow(
             cleaned_name,
-            cleaned_name,
+            defaults[normalize_lookup_key(cleaned_name)],
             "suggested" if suggestion is not None else "new",
             suggestion,
         ))
@@ -147,6 +178,7 @@ def prepare_aliases(
         list(review_rows),
         database_available,
         database_error,
+        historical_aliases,
     )
 
 
@@ -156,8 +188,8 @@ def aggregate_resolved_rows(
     """Aggregate normalized measures by their resolved final company name."""
     resolved = rows.copy()
     cleaned_names = resolved["cleaned_name"].tolist()
-    trimmed = _validated_final_names(cleaned_names, final_names)
-    resolved["final_name"] = resolved["cleaned_name"].map(trimmed)
+    validated = _validated_final_names(cleaned_names, final_names)
+    resolved["final_name"] = resolved["cleaned_name"].map(validated)
     return (
         resolved.groupby("final_name", as_index=False, sort=False)[["rns", "revenue"]]
         .sum()
@@ -180,7 +212,7 @@ def save_alias_changes(
     """Validate, persist, and aggregate a complete edited alias mapping."""
     rows = prepared.rows.copy(deep=True)
     cleaned_names = rows["cleaned_name"].tolist()
-    trimmed = _validated_final_names(cleaned_names, final_names)
+    validated = _validated_final_names(cleaned_names, final_names)
     cleaned_name_set = set(cleaned_names)
     unexpected = [name for name in final_names if name not in cleaned_name_set]
     if unexpected:
@@ -192,19 +224,42 @@ def save_alias_changes(
     mappings_by_key: dict[str, AliasMapping] = {}
     for cleaned_name in cleaned_names:
         alias_key = normalize_lookup_key(cleaned_name)
-        final_name = trimmed[cleaned_name]
+        final_name = validated[cleaned_name]
         existing = mappings_by_key.get(alias_key)
         if existing is not None and existing.canonical_name != final_name:
             raise ServiceValidationError(
-                "Names with the same alias key need the same final company name"
+                "Names with the same alias key need the same final company name: "
+                f"{existing.cleaned_alias!r} → {existing.canonical_name!r}; "
+                f"{cleaned_name!r} → {final_name!r} (key {alias_key!r})"
             )
         if existing is None:
             mappings_by_key[alias_key] = AliasMapping(
                 cleaned_name, alias_key, final_name
             )
 
-    repository.upsert_aliases(list(mappings_by_key.values()))
-    return aggregate_resolved_rows(rows, trimmed)
+    # Keep older storage keys consistent in the same batch. A current mapping
+    # may legitimately reuse an old key (e.g. decomposed CAFÉ previously used
+    # "cafe"); in that case it replaces that legacy row under its own name.
+    persisted = dict(mappings_by_key)
+    for legacy_key, historical in prepared.historical_aliases.items():
+        mapping = mappings_by_key.get(historical.alias_key)
+        if mapping is not None:
+            persisted.setdefault(legacy_key, AliasMapping(
+                mapping.cleaned_alias, legacy_key, mapping.canonical_name
+            ))
+    # A report containing only CAFE can reuse the old key of CAFÉ. Preserve
+    # that displaced company's reviewed mapping even when absent from this report.
+    pending = list(persisted)
+    canonical_keys = set(mappings_by_key)
+    while pending:
+        displaced = prepared.historical_aliases.get(pending.pop())
+        if displaced is not None and displaced.alias_key not in canonical_keys:
+            # A canonical entry takes precedence over a redundant legacy mirror.
+            persisted[displaced.alias_key] = displaced
+            canonical_keys.add(displaced.alias_key)
+            pending.append(displaced.alias_key)
+    repository.upsert_aliases(list(persisted.values()))
+    return aggregate_resolved_rows(rows, validated)
 
 
 def _aggregate_without_aliases(rows: pd.DataFrame) -> pd.DataFrame:
@@ -231,7 +286,16 @@ def _validated_final_names(
             "Missing or blank: " + ", ".join(invalid)
         )
 
-    trimmed: dict[str, str] = {}
+    format_errors = []
+    validated: dict[str, str] = {}
     for cleaned_name in cleaned_names:
-        trimmed[cleaned_name] = final_names[cleaned_name].strip()
-    return trimmed
+        value = final_names[cleaned_name]
+        issue = final_name_error(value)
+        if issue:
+            format_errors.append(f"{cleaned_name!r}: {issue}")
+        validated[cleaned_name] = value
+    if format_errors:
+        raise ServiceValidationError(
+            "Invalid final company names. " + "; ".join(format_errors)
+        )
+    return validated

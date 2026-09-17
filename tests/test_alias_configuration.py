@@ -51,5 +51,5 @@ def test_real_app_prepares_aliases_from_home_server(monkeypatch, tmp_path):
                            "Sum of R REVENUE": 150}])
     result = app._prepare_collation_aliases([frame])
     assert result.database_available
-    assert result.review_rows[0].final_name == "Saved Company"
+    assert result.review_rows[0].final_name == "SAVED COMPANY"
     assert calls == [("http://localhost", token, "api")]

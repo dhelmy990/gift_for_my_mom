@@ -18,7 +18,7 @@ def test_close_spelling_variant_suggests_saved_destination() -> None:
 
     assert suggestion is not None
     assert suggestion.saved_alias == "HKTRM"
-    assert suggestion.canonical_name == "Hong Kong TUYI Business Travel Limited"
+    assert suggestion.canonical_name == "HONG KONG TUYI BUSINESS TRAVEL LIMITED"
     assert suggestion.score >= FUZZY_THRESHOLD
 
 
@@ -40,7 +40,7 @@ def test_exact_spelling_returns_the_unique_candidate_at_full_score() -> None:
     suggestion = suggest_alias("HKTRM", [HKTRM])
 
     assert suggestion == AliasSuggestion(
-        "HKTRM", "Hong Kong TUYI Business Travel Limited", 100.0
+        "HKTRM", "HONG KONG TUYI BUSINESS TRAVEL LIMITED", 100.0
     )
 
 

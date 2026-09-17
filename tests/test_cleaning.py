@@ -45,7 +45,7 @@ def test_company_alias_fixture_freezes_source_corpus() -> None:
     ],
 )
 def test_clean_company_name(raw_name: str, expected: str) -> None:
-    assert clean_company_name(raw_name) == expected
+    assert clean_company_name(raw_name) == expected.upper()
 
 
 def test_clean_company_name_rejects_suffix_only_name() -> None:
@@ -54,20 +54,20 @@ def test_clean_company_name_rejects_suffix_only_name() -> None:
 
 
 def test_clean_company_name_removes_lowercase_non_ascii_trailing_text() -> None:
-    assert clean_company_name("Betoptop GmbHüber den Dächern") == "Betoptop"
+    assert clean_company_name("Betoptop GmbHüber den Dächern") == "BETOPTOP"
 
 
 def test_clean_company_name_preserves_suffix_like_hyphenated_word() -> None:
-    assert clean_company_name("Acme co-op") == "Acme co-op"
+    assert clean_company_name("Acme co-op") == "ACME CO-OP"
 
 
 def test_clean_company_name_removes_lowercase_ascii_trailing_text() -> None:
-    assert clean_company_name("Acme LTDroom 12") == "Acme"
+    assert clean_company_name("Acme LTDroom 12") == "ACME"
 
 
 @pytest.mark.parametrize("name", ["cobalt", "company", "co-op"])
 def test_clean_company_name_preserves_ambiguous_co_words(name: str) -> None:
-    assert clean_company_name(name) == name
+    assert clean_company_name(name) == name.upper()
 
 
 def test_clean_company_name_does_not_treat_compass_prefix_as_co_suffix() -> None:
@@ -79,11 +79,11 @@ def test_clean_company_name_does_not_treat_compass_prefix_as_co_suffix() -> None
 
 @pytest.mark.parametrize("name", ["HKTRM", "MTLVintners Place"])
 def test_clean_company_name_does_not_infer_aliases(name: str) -> None:
-    assert clean_company_name(name) == name
+    assert clean_company_name(name) == name.upper()
 
 
 def test_clean_company_name_removes_suffix_wrapper_punctuation() -> None:
-    assert clean_company_name("Acme (Pte Ltd)") == "Acme"
+    assert clean_company_name("Acme (Pte Ltd)") == "ACME"
 
 
 @pytest.mark.parametrize(
@@ -97,12 +97,12 @@ def test_clean_company_name_removes_suffix_wrapper_punctuation() -> None:
 def test_clean_company_name_removes_complete_parenthesized_segments(
     raw_name: str, expected: str
 ) -> None:
-    assert clean_company_name(raw_name) == expected
+    assert clean_company_name(raw_name) == expected.upper()
 
 
 @pytest.mark.parametrize("raw_name", ["ACME (Singapore", "ACME Singapore)"])
 def test_clean_company_name_preserves_unmatched_parentheses(raw_name: str) -> None:
-    assert clean_company_name(raw_name) == raw_name
+    assert clean_company_name(raw_name) == raw_name.upper()
 
 
 def test_clean_company_name_rejects_parenthesized_only_name() -> None:

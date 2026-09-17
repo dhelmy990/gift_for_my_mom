@@ -36,7 +36,7 @@ def test_loads_all_24_pairs_as_alias_mappings() -> None:
     assert len(mappings) == 24
     hktrm = next(item for item in mappings if item.cleaned_alias == "HKTRM")
     assert hktrm.alias_key == "hktrm"
-    assert hktrm.canonical_name == "Hong Kong TUYI Business Travel Limited"
+    assert hktrm.canonical_name == "HONG KONG TUYI BUSINESS TRAVEL LIMITED"
 
 
 def test_seed_is_one_repeatable_upsert() -> None:
@@ -60,16 +60,16 @@ def test_all_fixture_inputs_resolve_to_exact_targets_after_seed() -> None:
     assert [
         exact[normalize_lookup_key(clean_company_name(row["input_text"]))]
         for row in rows
-    ] == [row["target_text"].strip() for row in rows]
+    ] == [row["target_text"].strip().upper() for row in rows]
 
 
-def test_cleans_input_and_trims_but_preserves_target_text(tmp_path: Path) -> None:
+def test_formats_input_and_target_preserving_target_words(tmp_path: Path) -> None:
     path = csv_file(
         tmp_path,
         "\ufeffinput_text,target_text,remarks\nAcme Pte Ltd,  ACME & Sons  ,reviewed\n",
     )
 
-    assert load_alias_rows(path) == [AliasMapping("Acme", "acme", "ACME & Sons")]
+    assert load_alias_rows(path) == [AliasMapping("ACME", "acme", "ACME & SONS")]
 
 
 @pytest.mark.parametrize(
@@ -178,8 +178,8 @@ def test_identical_duplicates_are_coalesced_deterministically(tmp_path: Path) ->
     )
 
     assert load_alias_rows(first) == load_alias_rows(second) == [
-        AliasMapping("ACME", "acme", "One"),
-        AliasMapping("Beta", "beta", "Two"),
+        AliasMapping("ACME", "acme", "ONE"),
+        AliasMapping("BETA", "beta", "TWO"),
     ]
 
 
