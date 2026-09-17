@@ -1,0 +1,5 @@
+*
+!alias_server/
+!alias_server/*.py
+!deploy/
+!deploy/Dockerfile

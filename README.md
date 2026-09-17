@@ -2,7 +2,10 @@
 
 A Streamlit app for cleaning company reports. Single-report mode produces a cleaned,
 downloadable spreadsheet. Collation mode combines multiple reports and saves reviewed
-company-name aliases in Supabase.
+company-name aliases through a home-server API (or legacy Supabase configuration).
+
+For the Debian home server, see [Home server setup](docs/HOME_SERVER_SETUP.md).
+It uses an authenticated API and SQLite, with no separate database daemon.
 
 ## How collation works
 
@@ -13,10 +16,10 @@ company-name aliases in Supabase.
    alias as an optional suggestion, which can be accepted, replaced with a manual edit,
    or ignored so the unchanged cleaned name is saved.
 5. After logging in with the app password, select **Save all changes and update totals**.
-6. The aliases are upserted to Supabase, then room nights and revenue are summed under
+6. The aliases are saved to the configured storage, then room nights and revenue are summed under
    each final company name.
 
-Supabase persistence uses one table, `company_aliases`. The current app does not use
+Persistence uses one table, `company_aliases`. The current app does not use
 the retired grouping, embedding, or submission-ledger database objects.
 
 ## Local setup
@@ -36,8 +39,8 @@ Run the app:
 .venv/bin/python -m streamlit run app.py
 ```
 
-Single-report mode works without Supabase. Collation mode needs the three secrets in
-[the Supabase setup guide](docs/SUPABASE_SETUP.md). Copy
+Single-report mode works without database storage. Collation mode needs the three secrets in
+[the home-server setup guide](docs/HOME_SERVER_SETUP.md). Copy
 `.streamlit/secrets.example.toml` to `.streamlit/secrets.toml`, replace the
 placeholders, and never commit the destination file.
 
@@ -55,7 +58,7 @@ If unrelated globally installed pytest plugins interfere, retry with:
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest -v
 ```
 
-## Supabase and initial aliases
+## Legacy Supabase and initial aliases
 
 Run [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL Editor. It creates
 the four-field `company_aliases` table, enables row-level security, restricts browser

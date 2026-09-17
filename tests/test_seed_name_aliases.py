@@ -240,3 +240,18 @@ def test_cli_returns_nonzero_with_safe_error(monkeypatch: pytest.MonkeyPatch) ->
     assert output.getvalue() == ""
     assert secret not in error.getvalue()
     assert error.getvalue().startswith("error:")
+
+
+def test_cli_prefers_home_api(monkeypatch):
+    captured = []
+    assert hasattr(seed_module, "HttpAliasRepository"), "Importer needs the home API adapter"
+    repository = FakeAliasRepository()
+    monkeypatch.setattr(seed_module, "HttpAliasRepository",
+                        lambda url, token: captured.append((url, token)) or repository)
+    output = io.StringIO()
+    assert seed_module.main(["--csv", str(FIXTURE)], environ={
+        "ALIAS_API_URL": "https://aliases.example", "ALIAS_API_TOKEN": "token",
+        "SUPABASE_URL": "old", "SUPABASE_SERVICE_KEY": "old",
+    }, stdout=output) == 0
+    assert captured == [("https://aliases.example", "token")]
+    assert output.getvalue() == "24\n"

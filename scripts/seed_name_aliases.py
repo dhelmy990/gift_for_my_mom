@@ -14,6 +14,8 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from company_names.cleaning import clean_company_name, normalize_lookup_key
+from company_names.configuration import repository_settings
+from company_names.http_repository import HttpAliasRepository
 from company_names.repository import (
     AliasMapping,
     AliasRepository,
@@ -107,10 +109,18 @@ def main(
     parser.add_argument("--supabase-service-key")
     args = parser.parse_args(argv)
 
-    url = args.supabase_url or environ.get("SUPABASE_URL", "")
-    key = args.supabase_service_key or environ.get("SUPABASE_SERVICE_KEY", "")
     try:
-        repository = SupabaseAliasRepository.from_credentials(url, key)
+        config = dict(environ)
+        if args.supabase_url:
+            config["SUPABASE_URL"] = args.supabase_url
+        if args.supabase_service_key:
+            config["SUPABASE_SERVICE_KEY"] = args.supabase_service_key
+        settings = repository_settings(config.get)
+        if settings is None:
+            raise ValueError("Alias storage is not configured")
+        backend, url, key = settings
+        repository = (HttpAliasRepository(url, key) if backend == "api"
+                      else SupabaseAliasRepository.from_credentials(url, key))
         count = seed_aliases(args.csv_path, repository)
     except SeedValidationError as exc:
         print(f"error: {exc}", file=stderr)

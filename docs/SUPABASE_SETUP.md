@@ -64,9 +64,10 @@ Both `https://YOUR-PROJECT.supabase.co` and the same URL with a trailing slash a
 accepted. Keep the quotation marks. Save the settings and reboot the app after any
 secret change.
 
-For local use, copy `.streamlit/secrets.example.toml` to
-`.streamlit/secrets.toml` and replace the placeholders. The destination is ignored
-by Git; never commit it.
+For legacy local use, put the three Supabase settings above in
+`.streamlit/secrets.toml`. The current example file configures the replacement
+home-server API; see [home-server setup](HOME_SERVER_SETUP.md) for that path.
+The destination is ignored by Git; never commit it.
 
 ## 5. Seed the 24 reviewed aliases
 

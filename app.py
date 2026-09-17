@@ -10,6 +10,8 @@ import streamlit as st
 
 from company_names.auth import authenticate, is_authenticated, log_out
 from company_names.repository import RepositoryUnavailableError, SupabaseAliasRepository
+from company_names.configuration import repository_settings
+from company_names.http_repository import HttpAliasRepository
 from company_names.service import (
     PreparedAliases,
     ServiceValidationError,
@@ -36,8 +38,10 @@ logger = logging.getLogger(__name__)
 
 
 @st.cache_resource
-def get_alias_repository(url: str, service_key: str) -> SupabaseAliasRepository:
+def get_alias_repository(url: str, service_key: str, backend: str = "supabase"):
     """Create one server-side repository client per credential pair."""
+    if backend == "api":
+        return HttpAliasRepository(url, service_key)
     return SupabaseAliasRepository.from_credentials(url, service_key)
 
 
@@ -149,14 +153,14 @@ def _process_extractor(uploaded_files, k: int) -> None:
 
 def _prepare_collation_aliases(frames: list[pd.DataFrame]) -> PreparedAliases:
     rows = pd.concat(frames, ignore_index=True)
-    url = _secret("SUPABASE_URL")
-    service_key = _secret("SUPABASE_SERVICE_KEY")
-    if not url or not service_key:
-        return prepare_aliases(rows, None)
     try:
-        repository = get_alias_repository(url, service_key)
+        settings = repository_settings(_secret)
+        if settings is None:
+            return prepare_aliases(rows, None)
+        backend, url, service_key = settings
+        repository = get_alias_repository(url, service_key, backend)
     except RepositoryUnavailableError as error:
-        logger.warning("Supabase alias repository unavailable: %s", error)
+        logger.warning("Alias repository unavailable: %s", error)
         prepared = prepare_aliases(rows, None)
         prepared.database_error = str(error)
         return prepared
@@ -247,15 +251,15 @@ def main() -> None:
             st.subheader("Last saved company totals")
             st.dataframe(aggregate, use_container_width=True)
 
-        url = _secret("SUPABASE_URL")
-        service_key = _secret("SUPABASE_SERVICE_KEY")
         repository = None
-        if url and service_key and prepared.database_available:
-            try:
-                repository = get_alias_repository(url, service_key)
-            except RepositoryUnavailableError as error:
-                logger.warning("Supabase alias editor unavailable: %s", error)
-                st.error(str(error))
+        try:
+            settings = repository_settings(_secret)
+            if settings is not None and prepared.database_available:
+                backend, url, service_key = settings
+                repository = get_alias_repository(url, service_key, backend)
+        except RepositoryUnavailableError as error:
+            logger.warning("Alias editor unavailable: %s", error)
+            st.error(str(error))
         result = render_alias_editor(
             prepared,
             repository,
