@@ -145,11 +145,11 @@ def test_client_failures_are_translated_without_leaking_details(operation, expec
         RecordingClient(error=RuntimeError("service-key-secret backend exploded"))
     )
 
-    with pytest.raises(RepositoryUnavailableError, match=f"^{expected}$") as caught:
+    with pytest.raises(RepositoryUnavailableError, match=f"^{expected}") as caught:
         operation(repository)
 
     assert caught.value.__cause__ is None
-    assert "secret" not in str(caught.value)
+    assert "service-key-secret" not in str(caught.value)
 
 
 @pytest.mark.parametrize(
@@ -171,8 +171,62 @@ def test_client_failures_are_translated_without_leaking_details(operation, expec
 )
 def test_malformed_list_response_is_safely_translated(data: object) -> None:
     with pytest.raises(
-        RepositoryUnavailableError, match="^Could not read company aliases$"
+        RepositoryUnavailableError, match="^Could not read company aliases"
     ) as caught:
         SupabaseAliasRepository(RecordingClient(data)).list_aliases()
 
     assert caught.value.__cause__ is None
+
+
+def test_supabase_request_failure_identifies_backend_and_code_without_secret(caplog):
+    repository = SupabaseAliasRepository(
+        RecordingClient(error=RuntimeError("private-key-and-response-body"))
+    )
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        repository.list_aliases()
+    message = str(caught.value)
+    for text in ("backend=supabase", "operation=read", "stage=request",
+                 "SupabaseAliasRepository.list_aliases", "RuntimeError", "ALIAS_API_URL"):
+        assert text in message
+        assert text in caplog.text
+    assert "private-key-and-response-body" not in message + caplog.text
+    assert "row=" not in message  # No company has been read yet.
+
+
+def test_supabase_invalid_row_identifies_row_and_field(caplog):
+    valid = {"cleaned_alias": "Acme", "alias_key": "acme", "canonical_name": "Acme"}
+    invalid = {"cleaned_alias": "Other", "alias_key": "other", "canonical_name": " "}
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        SupabaseAliasRepository(RecordingClient([valid, invalid])).list_aliases()
+    for text in ("backend=supabase", "stage=validate_rows", "row=2", "field=canonical_name"):
+        assert text in str(caught.value)
+    assert "row=2" in caplog.text
+
+
+def test_supabase_api_error_retains_error_code_but_not_raw_details(caplog):
+    from postgrest.exceptions import APIError
+    error = APIError({"code": "PGRST205", "message": "private-api-key",
+                      "details": "private-database-details", "hint": "private-hint"})
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        SupabaseAliasRepository(RecordingClient(error=error)).list_aliases()
+    assert "error_code=PGRST205" in str(caught.value)
+    assert "private-" not in str(caught.value) + caplog.text
+
+
+def test_unrecognized_error_code_is_not_exposed(caplog):
+    from postgrest.exceptions import APIError
+    error = APIError({"code": "private-secret-value", "message": "private-message"})
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        SupabaseAliasRepository(RecordingClient(error=error)).list_aliases()
+    assert "error_code=" not in str(caught.value)
+    assert "private-" not in str(caught.value) + caplog.text
+
+
+def test_unexpected_field_names_and_company_values_are_not_exposed(caplog):
+    row = {"cleaned_alias": "private-company-value", "alias_key": "alias",
+           "canonical_name": "Company", "private-secret-field": "private-value"}
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        SupabaseAliasRepository(RecordingClient([row])).list_aliases()
+    assert "unexpected fields" in str(caught.value)
+    assert "row=1" in str(caught.value)
+    assert "private-" not in str(caught.value) + caplog.text

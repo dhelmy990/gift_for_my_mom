@@ -72,6 +72,34 @@ can remove the old settings once the deployed workflow is verified.
 The old Supabase adapter/dependency remains only to support rollout rollback.
 With the API configured, no Supabase connection is created.
 
+### Reading storage errors
+
+Storage errors now include the backend, operation, failure stage, and code
+location. The same sanitized message is written to Streamlit's server logs.
+Raw exception messages, credentials, company values, and response bodies are
+not included in diagnostics.
+
+- `backend=supabase`: the legacy adapter was selected. Check that
+  `ALIAS_API_URL` and `ALIAS_API_TOKEN` are top-level secrets, outside any TOML
+  `[section]`, and that the app has deployed the updated code. Reboot and process
+  the PDFs again to replace an error retained in the current report session.
+- `backend=home-api; stage=request`: the HTTP request failed. The exception
+  class distinguishes, for example, `ConnectError` from `ReadTimeout`. No
+  specific company is implicated by a connection failure.
+- `stage=response`: the server returned an error status. HTTP 401/403 can mean
+  a token or Cloudflare access problem; HTTP 502/503 can mean a tunnel or origin
+  service problem. The status alone does not establish the root cause.
+- `stage=decode_json` / `validate_response`: the response is not the expected
+  JSON document, which can happen if a proxy serves an HTML page.
+- `stage=validate_rows; row=2; field=canonical_name`: the second **stored alias**
+  in the returned list has an invalid field. This is not row 2 of the uploaded
+  PDF. Both adapters request rows ordered by `alias_key`.
+- `stage=acknowledge_save`: the response did not confirm the submitted row
+  count. Do not assume the save succeeded; retrying the same upsert is safe.
+
+Supabase errors preserve standard database error codes such as `PGRST205` when
+available, without displaying the provider's potentially sensitive message.
+
 Process a report, verify a known alias, save a reviewed mapping, and process it
 again to confirm the saved name. Only the 24 reviewed local CSV mappings were
 available for the initial import; later Supabase-only changes are not recovered.

@@ -69,3 +69,43 @@ def test_save_requires_matching_acknowledgement():
     repo = repository(httpx.MockTransport(lambda request: httpx.Response(200, json={"saved": 0})))
     with pytest.raises(RepositoryUnavailableError, match="invalid response"):
         repo.upsert_aliases([MAPPING])
+
+
+def test_http_error_names_operation_status_and_location(caplog):
+    repo = repository(httpx.MockTransport(lambda request: httpx.Response(503, text=TOKEN)))
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        repo.list_aliases()
+    message = str(caught.value)
+    for text in ("backend=home-api", "operation=read", "stage=response", "HTTP 503",
+                 "HttpAliasRepository.list_aliases"):
+        assert text in message
+    assert "not confirmed saved" not in message
+    assert TOKEN not in message + caplog.text
+
+
+def test_http_invalid_row_reports_index_and_field_without_dumping_response(caplog):
+    payload = {"aliases": [
+        {"cleaned_alias": "Acme", "alias_key": "acme", "canonical_name": "Acme"},
+        {"cleaned_alias": "Other", "alias_key": "other", "canonical_name": None},
+    ]}
+    repo = repository(httpx.MockTransport(lambda request: httpx.Response(200, json=payload)))
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        repo.list_aliases()
+    for text in ("stage=validate_rows", "row=2", "field=canonical_name"):
+        assert text in str(caught.value)
+        assert text in caplog.text
+
+
+def test_http_decode_and_timeout_failures_have_distinct_stages(caplog):
+    repo = repository(httpx.MockTransport(lambda request: httpx.Response(200, text=TOKEN)))
+    with pytest.raises(RepositoryUnavailableError, match="stage=decode_json"):
+        repo.list_aliases()
+
+    def timeout(request):
+        raise httpx.ReadTimeout(TOKEN, request=request)
+    repo = repository(httpx.MockTransport(timeout))
+    with pytest.raises(RepositoryUnavailableError) as caught:
+        repo.upsert_aliases([MAPPING])
+    for text in ("operation=save", "stage=request", "ReadTimeout", "not confirmed saved"):
+        assert text in str(caught.value)
+    assert TOKEN not in str(caught.value) + caplog.text
