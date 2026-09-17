@@ -379,6 +379,7 @@ def render_alias_editor(
             prepared,
             edited_final_names(prepared.review_rows, edits),
             repository,
+            page_size=int(page_size),
         )
     except (RepositoryUnavailableError, ServiceValidationError) as error:
         st.error(str(error))

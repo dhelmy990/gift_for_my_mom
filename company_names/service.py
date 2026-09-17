@@ -132,6 +132,7 @@ def prepare_aliases(
             database_error = str(error)
 
     exact: dict[str, AliasMapping] = {}
+    saved_locations: dict[str, str] = {}
     historical_aliases: dict[str, AliasMapping] = {}
     for index, item in enumerate(aliases, start=1):
         try:
@@ -145,12 +146,21 @@ def prepare_aliases(
                 f"Saved alias row {index} is invalid: {error}"
             ) from None
         previous = exact.get(saved.alias_key)
+        location = (
+            f"database row {index}: old name {item.cleaned_alias!r}, "
+            f"stored key {item.alias_key!r}, final name {item.canonical_name!r}"
+        )
         if previous is not None and previous.canonical_name != saved.canonical_name:
             raise ServiceValidationError(
                 f"Saved aliases conflict for key {saved.alias_key!r}: "
-                f"{previous.canonical_name!r} and {saved.canonical_name!r}"
+                f"{previous.canonical_name!r} and {saved.canonical_name!r}.\n\n"
+                f"- {saved_locations[saved.alias_key]}\n"
+                f"- {location}\n\n"
+                "These duplicate mappings are already in the database. "
+                "Their final company names must agree before this report can load."
             )
         exact[saved.alias_key] = saved
+        saved_locations[saved.alias_key] = location
         if item.alias_key != saved.alias_key:
             historical_aliases[item.alias_key] = saved
     aliases = list(exact.values())
@@ -208,6 +218,8 @@ def save_alias_changes(
     prepared: PreparedAliases,
     final_names: dict[str, str],
     repository: AliasRepository,
+    *,
+    page_size: int = 20,
 ) -> pd.DataFrame:
     """Validate, persist, and aggregate a complete edited alias mapping."""
     rows = prepared.rows.copy(deep=True)
@@ -227,10 +239,21 @@ def save_alias_changes(
         final_name = validated[cleaned_name]
         existing = mappings_by_key.get(alias_key)
         if existing is not None and existing.canonical_name != final_name:
+            duplicates = [
+                f"- Page {position // page_size + 1}, row {position % page_size + 1} "
+                f"(overall row {position + 1}): old name {name!r} "
+                f"→ final name {validated[name]!r}"
+                for position, name in enumerate(cleaned_names)
+                if normalize_lookup_key(name) == alias_key
+            ]
             raise ServiceValidationError(
-                "Names with the same alias key need the same final company name: "
-                f"{existing.cleaned_alias!r} → {existing.canonical_name!r}; "
-                f"{cleaned_name!r} → {final_name!r} (key {alias_key!r})"
+                f"Duplicate company mappings use the same alias key {alias_key!r} "
+                "but have different final names.\n\n"
+                f"To find them, select 'All names', clear the search, and use "
+                f"{page_size} rows per page:\n\n"
+                + "\n".join(duplicates)
+                + "\n\nSet every listed row to the same final company name. "
+                "Save checks all pages, including rows outside your current view."
             )
         if existing is None:
             mappings_by_key[alias_key] = AliasMapping(
